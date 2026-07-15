@@ -1,0 +1,71 @@
+name: Track Safari CFBundleVersion
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # Runs daily at 2 AM UTC
+  workflow_dispatch:        # Also allows manual trigger from GitHub UI
+
+jobs:
+  get-safari-version:
+    runs-on: macos-latest   # ← This spins up a real Apple Silicon Mac VM
+
+    steps:
+      # Step 1: Download your repo onto the runner
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Read Safari's version.plist directly
+      - name: Read Safari CFBundleVersion
+        run: |
+          SAFARI_PATH="/Applications/Safari.app/Contents"
+
+          CFB=$(defaults read "$SAFARI_PATH/version.plist" CFBundleVersion)
+          VER=$(defaults read "$SAFARI_PATH/Info.plist"    CFBundleShortVersionString)
+          MACOS=$(sw_vers -productVersion)
+          DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "Safari Version   : $VER"
+          echo "CFBundleVersion  : $CFB"
+          echo "macOS Version    : $MACOS"
+
+          # Write to a JSON file in the repo
+          cat > safari_versions.json << EOF
+          {
+            "last_updated": "$DATE",
+            "macos_version": "$MACOS",
+            "safari_marketing_version": "$VER",
+            "safari_CFBundleVersion": "$CFB"
+          }
+          EOF
+
+      # Step 3: Append to a history log (so you build up a table over time)
+      - name: Append to history CSV
+        run: |
+          CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
+          VER=$(defaults read /Applications/Safari.app/Contents/Info.plist CFBundleShortVersionString)
+          MACOS=$(sw_vers -productVersion)
+          DATE=$(date -u +"%Y-%m-%d")
+
+          # Create header if file doesn't exist
+          if [ ! -f safari_history.csv ]; then
+            echo "date,macos_version,safari_version,CFBundleVersion" > safari_history.csv
+          fi
+
+          # Append only if this CFBundleVersion isn't already recorded
+          if ! grep -q "$CFB" safari_history.csv; then
+            echo "$DATE,$MACOS,$VER,$CFB" >> safari_history.csv
+            echo "New entry added: $VER ($CFB)"
+          else
+            echo "Already recorded: $VER ($CFB) — no change"
+          fi
+
+      # Step 4: Commit and push the updated files back to the repo
+      - name: Commit and push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add safari_versions.json safari_history.csv
+          git diff --staged --quiet && echo "No changes to commit" || (
+            git commit -m "chore: update Safari CFBundleVersion $(date -u +%Y-%m-%d)"
+            git push
+          )
