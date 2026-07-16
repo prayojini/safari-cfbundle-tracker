@@ -102,15 +102,8 @@ jobs:
           echo "$UPDATE_LIST"
           echo "────────────────────────────────────────────"
 
-          # softwareupdate -l output format:
-          #
-          #   * Label: Safari26.5SequoiaAuto-26.5.2
-          #       Title: Safari, Version: 26.5.2, Size: 85692K, Recommended: YES
-          #
-          # awk logic:
-          #   - On every "* Label:" line, save the label value
-          #   - On "Title: Safari" line, print saved label + extract size → exit
-
+          # ── Extract Safari label ──────────────────────
+          # Uses sub() which IS supported in BSD awk (macOS default)
           SAFARI_LABEL=$(echo "$UPDATE_LIST" \
             | awk '
                 /\* Label:/ {
@@ -123,14 +116,16 @@ jobs:
                 }
               ')
 
+          # ── Extract size using grep -oP ───────────────
+          # Avoids BSD awk limitation (no 3-arg match)
+          # Handles both formats:
+          #   Size: 85692K       (old format)
+          #   Size: 11768183KiB  (new format)
+          # Pattern: number that appears right after "Size: "
+          #          and before K (regardless of what follows K)
           SAFARI_SIZE_K=$(echo "$UPDATE_LIST" \
-            | awk '
-                /Title: Safari[^a-zA-Z]/ {
-                  match($0, /Size: ([0-9]+)K/, arr)
-                  print arr[1]
-                  exit
-                }
-              ')
+            | grep "Title: Safari[^a-zA-Z]" \
+            | grep -oP '(?<=Size: )[0-9]+(?=K)')
 
           if [ -z "$SAFARI_LABEL" ]; then
             echo "No Safari update found in softwareupdate list"
@@ -139,10 +134,11 @@ jobs:
             exit 0
           fi
 
+          # KiB → bytes = × 1024
           SAFARI_SIZE_BYTES=$(( SAFARI_SIZE_K * 1024 ))
 
           echo "Safari Label       : $SAFARI_LABEL"
-          echo "Safari Size        : ${SAFARI_SIZE_K}K = ${SAFARI_SIZE_BYTES} bytes"
+          echo "Safari Size        : ${SAFARI_SIZE_K} KiB = ${SAFARI_SIZE_BYTES} bytes"
 
           echo "safari_available=true"               >> $GITHUB_OUTPUT
           echo "safari_label=$SAFARI_LABEL"           >> $GITHUB_OUTPUT
