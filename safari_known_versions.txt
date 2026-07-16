@@ -1,2 +1,2 @@
-Sonoma=0
-Sequoia=0
+Sonoma=26.5.2
+Sequoia=26.5.2
