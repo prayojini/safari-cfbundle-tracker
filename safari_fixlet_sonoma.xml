@@ -1,6 +1,0 @@
-<!-- Safari 26.5.2 — macOS Sonoma -->
-<Fixlet>
-  <Relevance><![CDATA[(exists string "ProductVersion" whose (it as string >= "14.0" and it as string < "15.0") of dictionary of it) of file "/System/Library/CoreServices/SystemVersion.plist"]]></Relevance>
-  <Relevance>(exists string "CFBundleVersion" whose (it as string != "19624.2.5.18.7") of dictionary of it) of file "/Applications/Safari.app/Contents/version.plist"</Relevance>
-  <Relevance><![CDATA[((version (version of application "Safari.app" as string & ".0.0") < "26.5.2" as version))]]></Relevance>
-</Fixlet>

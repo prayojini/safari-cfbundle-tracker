@@ -1,0 +1,2 @@
+Sonoma=0
+Sequoia=0

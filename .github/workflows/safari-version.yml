@@ -2,11 +2,76 @@ name: Track Safari CFBundleVersion
 
 on:
   schedule:
-    - cron: "0 2 * * *"
+    - cron: "0 */2 * * *"
   workflow_dispatch:
 
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 1 — Ubuntu Linux (free). Runs every 2 hours.
+#          Scrapes Apple release page. Compares with txt file.
+#          Only triggers Mac jobs if a new Safari version is found.
+# ─────────────────────────────────────────────────────────────────────────────
 jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      new_release:   ${{ steps.check.outputs.new_release }}
+      latest_safari: ${{ steps.check.outputs.latest_safari }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scrape Apple release page and compare with known versions
+        id: check
+        run: |
+          echo "Fetching Apple security releases page..."
+          PAGE=$(curl -s "https://support.apple.com/en-us/100100")
+
+          # Handles all version formats:
+          #   Safari 26        →  26
+          #   Safari 18.5      →  18.5
+          #   Safari 26.5.2    →  26.5.2
+          # Ignores non-version entries like:
+          #   Safari Extensions, Safari Technology Preview
+          LATEST=$(echo "$PAGE" \
+            | grep -oP 'Safari \K[0-9]+(\.[0-9]+){0,2}' \
+            | head -1)
+
+          if [ -z "$LATEST" ]; then
+            echo "ERROR: Could not parse Safari version from Apple page"
+            exit 1
+          fi
+
+          echo "Latest Safari on Apple page : $LATEST"
+
+          # Read known versions from txt file
+          KNOWN_SONOMA=$(grep  "^Sonoma="  safari_known_versions.txt | cut -d= -f2)
+          KNOWN_SEQUOIA=$(grep "^Sequoia=" safari_known_versions.txt | cut -d= -f2)
+
+          echo "Known Sonoma  version       : $KNOWN_SONOMA"
+          echo "Known Sequoia version       : $KNOWN_SEQUOIA"
+
+          if [ "$LATEST" != "$KNOWN_SONOMA" ] || [ "$LATEST" != "$KNOWN_SEQUOIA" ]; then
+            echo "──────────────────────────────────────────"
+            echo "New Safari detected: $LATEST — triggering Mac builds"
+            echo "──────────────────────────────────────────"
+            echo "new_release=true"       >> $GITHUB_OUTPUT
+            echo "latest_safari=$LATEST"  >> $GITHUB_OUTPUT
+          else
+            echo "Safari $LATEST already recorded — no Mac builds needed"
+            echo "new_release=false"      >> $GITHUB_OUTPUT
+          fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 2 — macOS runners (expensive — ONLY runs when new Safari is detected)
+#          Runs on BOTH Sonoma and Sequoia in parallel.
+#          Extracts: label, size_bytes from softwareupdate -l
+#          Installs only Safari, then reads CFBundleVersion.
+# ─────────────────────────────────────────────────────────────────────────────
   get-safari-version:
+    needs: check-release
+    if: needs.check-release.outputs.new_release == 'true'
+
     strategy:
       matrix:
         include:
@@ -21,84 +86,112 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show current Safari version
+      - name: Safari version BEFORE update
         run: |
-          echo "Safari BEFORE update:"
-          defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion
-          defaults read /Applications/Safari.app/Contents/Info.plist CFBundleShortVersionString
+          echo "── BEFORE ──────────────────────────────────"
+          VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
+          CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
+          echo "  Safari version  : $VER"
+          echo "  CFBundleVersion : $CFB"
 
-      # ── Install only the Safari update ──────────────────────────────────
-      - name: Find and install Safari update only
+      - name: Run softwareupdate -l and extract Safari label + size
+        id: safari_info
         run: |
           echo "Listing available software updates..."
           UPDATE_LIST=$(sudo softwareupdate -l 2>&1)
           echo "$UPDATE_LIST"
-          echo "---"
+          echo "────────────────────────────────────────────"
 
-          # Extract the label of the Safari update.
-          # softwareupdate -l output pattern:
-          #   * Label: Safari26.5SequoiaAuto-26.5.2
-          #       Title: Safari, Version: 26.5.2 ...
+          # softwareupdate -l output format:
           #
-          # Strategy: grab the Label line that is immediately followed
-          # by a Title line containing "Safari".
+          #   * Label: Safari26.5SequoiaAuto-26.5.2
+          #       Title: Safari, Version: 26.5.2, Size: 85692K, Recommended: YES
+          #
+          # awk logic:
+          #   - On every "* Label:" line, save the label value
+          #   - On "Title: Safari" line, print saved label + extract size → exit
 
           SAFARI_LABEL=$(echo "$UPDATE_LIST" \
             | awk '
-                /\* Label:/ { label = $0 }
-                /Title: Safari/ {
-                  # extract just the label value after "Label: "
+                /\* Label:/ {
+                  label = $0
                   sub(/.*\* Label: /, "", label)
+                }
+                /Title: Safari[^a-zA-Z]/ {
                   print label
                   exit
                 }
               ')
 
+          SAFARI_SIZE_K=$(echo "$UPDATE_LIST" \
+            | awk '
+                /Title: Safari[^a-zA-Z]/ {
+                  match($0, /Size: ([0-9]+)K/, arr)
+                  print arr[1]
+                  exit
+                }
+              ')
+
           if [ -z "$SAFARI_LABEL" ]; then
-            echo "No Safari update found in softwareupdate list."
-            echo "Safari is already up to date — skipping install."
+            echo "No Safari update found in softwareupdate list"
+            echo "safari_available=false" >> $GITHUB_OUTPUT
+            echo "safari_size_bytes=0"    >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "Found Safari update: '$SAFARI_LABEL'"
-          echo "Installing Safari update only..."
+          SAFARI_SIZE_BYTES=$(( SAFARI_SIZE_K * 1024 ))
 
-          sudo softwareupdate -i "$SAFARI_LABEL" --verbose
-          INSTALL_EXIT=$?
+          echo "Safari Label       : $SAFARI_LABEL"
+          echo "Safari Size        : ${SAFARI_SIZE_K}K = ${SAFARI_SIZE_BYTES} bytes"
 
-          if [ $INSTALL_EXIT -eq 0 ]; then
-            echo "Safari update installed successfully."
+          echo "safari_available=true"               >> $GITHUB_OUTPUT
+          echo "safari_label=$SAFARI_LABEL"           >> $GITHUB_OUTPUT
+          echo "safari_size_bytes=$SAFARI_SIZE_BYTES" >> $GITHUB_OUTPUT
+
+      - name: Install Safari update only
+        if: steps.safari_info.outputs.safari_available == 'true'
+        run: |
+          LABEL="${{ steps.safari_info.outputs.safari_label }}"
+          echo "Installing: $LABEL"
+          echo "────────────────────────────────────────────"
+          sudo softwareupdate -i "$LABEL" --verbose
+          RESULT=$?
+          echo "────────────────────────────────────────────"
+          if [ $RESULT -eq 0 ]; then
+            echo "Safari installed successfully"
           else
-            echo "softwareupdate exited with code $INSTALL_EXIT"
-            exit $INSTALL_EXIT
+            echo "ERROR: softwareupdate exited with code $RESULT"
+            exit $RESULT
           fi
-      # ────────────────────────────────────────────────────────────────────
 
-      - name: Show Safari version after update
+      - name: Safari version AFTER update — capture CFBundleVersion
         run: |
-          echo "Safari AFTER update:"
+          echo "── AFTER ───────────────────────────────────"
+          VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
           CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
-          VER=$(defaults read /Applications/Safari.app/Contents/Info.plist CFBundleShortVersionString)
-          echo "  Marketing version : $VER"
-          echo "  CFBundleVersion   : $CFB"
-
-      - name: Read and save Safari CFBundleVersion
-        run: |
-          CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
-          VER=$(defaults read /Applications/Safari.app/Contents/Info.plist CFBundleShortVersionString)
           MACOS=$(sw_vers -productVersion)
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          SIZE="${{ steps.safari_info.outputs.safari_size_bytes }}"
+          SIZE=${SIZE:-0}
+
+          echo "  macOS           : $MACOS"
+          echo "  Safari version  : $VER"
+          echo "  CFBundleVersion : $CFB"
+          echo "  Size (bytes)    : $SIZE"
 
           mkdir -p output
           cat > output/safari_${{ matrix.macos_name }}.json << EOF
           {
-            "last_updated": "$DATE",
-            "macos_name": "${{ matrix.macos_name }}",
-            "macos_version": "$MACOS",
-            "safari_version": "$VER",
-            "CFBundleVersion": "$CFB"
+            "last_updated":    "$DATE",
+            "macos_name":      "${{ matrix.macos_name }}",
+            "macos_version":   "$MACOS",
+            "safari_version":  "$VER",
+            "CFBundleVersion": "$CFB",
+            "size_bytes":      $SIZE
           }
           EOF
+
+          echo "Output:"
           cat output/safari_${{ matrix.macos_name }}.json
 
       - name: Upload result artifact
@@ -107,9 +200,14 @@ jobs:
           name: safari-${{ matrix.macos_name }}
           path: output/safari_${{ matrix.macos_name }}.json
 
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 3 — Ubuntu Linux. Waits for both Mac jobs.
+#          Downloads artifacts, updates txt file,
+#          appends to history CSV, commits everything.
+# ─────────────────────────────────────────────────────────────────────────────
   commit-results:
     runs-on: ubuntu-latest
-    needs: get-safari-version
+    needs: [check-release, get-safari-version]
 
     steps:
       - name: Checkout repository
@@ -127,50 +225,65 @@ jobs:
           name: safari-Sequoia
           path: output/
 
-      - name: Append to history CSV and generate fixlets
+      - name: Show both results
         run: |
-          SONOMA_CFB=$(jq -r '.CFBundleVersion' output/safari_Sonoma.json)
-          SONOMA_VER=$(jq -r '.safari_version'  output/safari_Sonoma.json)
-          SONOMA_MAC=$(jq -r '.macos_version'   output/safari_Sonoma.json)
-          SEQUOIA_CFB=$(jq -r '.CFBundleVersion' output/safari_Sequoia.json)
-          SEQUOIA_VER=$(jq -r '.safari_version'  output/safari_Sequoia.json)
-          SEQUOIA_MAC=$(jq -r '.macos_version'   output/safari_Sequoia.json)
+          echo "=== Sonoma  ===" && cat output/safari_Sonoma.json
+          echo "=== Sequoia ===" && cat output/safari_Sequoia.json
+
+      - name: Update safari_known_versions.txt
+        run: |
+          SONOMA_VER=$(jq -r  '.safari_version' output/safari_Sonoma.json)
+          SEQUOIA_VER=$(jq -r '.safari_version' output/safari_Sequoia.json)
+
+          cat > safari_known_versions.txt << EOF
+          Sonoma=$SONOMA_VER
+          Sequoia=$SEQUOIA_VER
+          EOF
+
+          echo "Updated safari_known_versions.txt:"
+          cat safari_known_versions.txt
+
+      - name: Append to history CSV
+        run: |
+          SONOMA_VER=$(jq -r   '.safari_version'  output/safari_Sonoma.json)
+          SONOMA_CFB=$(jq -r   '.CFBundleVersion' output/safari_Sonoma.json)
+          SONOMA_MAC=$(jq -r   '.macos_version'   output/safari_Sonoma.json)
+          SONOMA_SIZE=$(jq -r  '.size_bytes'      output/safari_Sonoma.json)
+
+          SEQUOIA_VER=$(jq -r  '.safari_version'  output/safari_Sequoia.json)
+          SEQUOIA_CFB=$(jq -r  '.CFBundleVersion' output/safari_Sequoia.json)
+          SEQUOIA_MAC=$(jq -r  '.macos_version'   output/safari_Sequoia.json)
+          SEQUOIA_SIZE=$(jq -r '.size_bytes'      output/safari_Sequoia.json)
+
           DATE=$(date -u +"%Y-%m-%d")
 
-          echo "Sonoma  : Safari $SONOMA_VER  → $SONOMA_CFB"
-          echo "Sequoia : Safari $SEQUOIA_VER → $SEQUOIA_CFB"
+          if [ ! -f safari_history.csv ]; then
+            echo "date,macos_name,macos_version,safari_version,CFBundleVersion,size_bytes" \
+              > safari_history.csv
+          fi
 
-          [ ! -f safari_history.csv ] && \
-            echo "date,macos_name,macos_version,safari_version,CFBundleVersion" > safari_history.csv
-          grep -q "$SONOMA_CFB"  safari_history.csv || \
-            echo "$DATE,Sonoma,$SONOMA_MAC,$SONOMA_VER,$SONOMA_CFB" >> safari_history.csv
-          grep -q "$SEQUOIA_CFB" safari_history.csv || \
-            echo "$DATE,Sequoia,$SEQUOIA_MAC,$SEQUOIA_VER,$SEQUOIA_CFB" >> safari_history.csv
+          grep -q "$SONOMA_CFB"  safari_history.csv \
+            || echo "$DATE,Sonoma,$SONOMA_MAC,$SONOMA_VER,$SONOMA_CFB,$SONOMA_SIZE"   >> safari_history.csv
 
-          cat > safari_fixlet_sonoma.xml << EOF
-          <!-- Safari $SONOMA_VER — macOS Sonoma -->
-          <Fixlet>
-            <Relevance><![CDATA[(exists string "ProductVersion" whose (it as string >= "14.0" and it as string < "15.0") of dictionary of it) of file "/System/Library/CoreServices/SystemVersion.plist"]]></Relevance>
-            <Relevance>(exists string "CFBundleVersion" whose (it as string != "$SONOMA_CFB") of dictionary of it) of file "/Applications/Safari.app/Contents/version.plist"</Relevance>
-            <Relevance><![CDATA[((version (version of application "Safari.app" as string & ".0.0") < "$SONOMA_VER" as version))]]></Relevance>
-          </Fixlet>
-          EOF
+          grep -q "$SEQUOIA_CFB" safari_history.csv \
+            || echo "$DATE,Sequoia,$SEQUOIA_MAC,$SEQUOIA_VER,$SEQUOIA_CFB,$SEQUOIA_SIZE" >> safari_history.csv
 
-          cat > safari_fixlet_sequoia.xml << EOF
-          <!-- Safari $SEQUOIA_VER — macOS Sequoia -->
-          <Fixlet>
-            <Relevance><![CDATA[(exists string "ProductVersion" whose (it as string >= "15.0" and it as string < "16.0") of dictionary of it) of file "/System/Library/CoreServices/SystemVersion.plist"]]></Relevance>
-            <Relevance>(exists string "CFBundleVersion" whose (it as string != "$SEQUOIA_CFB") of dictionary of it) of file "/Applications/Safari.app/Contents/version.plist"</Relevance>
-            <Relevance><![CDATA[((version (version of application "Safari.app" as string & ".0.0") < "$SEQUOIA_VER" as version))]]></Relevance>
-          </Fixlet>
-          EOF
+          echo "safari_history.csv:"
+          cat safari_history.csv
 
-      - name: Commit and push
+      - name: Commit and push all changes
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add safari_history.csv safari_fixlet_sonoma.xml safari_fixlet_sequoia.xml
-          git diff --staged --quiet && echo "No changes to commit" || (
-            git commit -m "chore: Safari CFBundleVersion $(date -u +%Y-%m-%d)"
-            git push
-          )
+
+          git add \
+            safari_known_versions.txt \
+            safari_history.csv \
+            output/
+
+          git diff --staged --quiet \
+            && echo "Nothing to commit — all files are current" \
+            || (
+              git commit -m "chore: Safari $(jq -r .safari_version output/safari_Sequoia.json) update $(date -u +%Y-%m-%d)"
+              git push
+            )
