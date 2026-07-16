@@ -2,70 +2,149 @@ name: Track Safari CFBundleVersion
 
 on:
   schedule:
-    - cron: "0 2 * * *"   # Runs daily at 2 AM UTC
-  workflow_dispatch:        # Also allows manual trigger from GitHub UI
+    - cron: "0 2 * * *"
+  workflow_dispatch:
 
 jobs:
   get-safari-version:
-    runs-on: macos-latest   # ← This spins up a real Apple Silicon Mac VM
+    strategy:
+      matrix:
+        include:
+          - os: macos-14        # macOS Sonoma  (14.x)
+            macos_name: Sonoma
+          - os: macos-15        # macOS Sequoia (15.x)
+            macos_name: Sequoia
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-      # Step 1: Download your repo onto the runner
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Read Safari's version.plist directly
       - name: Read Safari CFBundleVersion
         run: |
           SAFARI_PATH="/Applications/Safari.app/Contents"
 
           CFB=$(defaults read "$SAFARI_PATH/version.plist" CFBundleVersion)
-          VER=$(defaults read "$SAFARI_PATH/Info.plist"    CFBundleShortVersionString)
+          VER=$(defaults read "$SAFARI_PATH/Info.plist" CFBundleShortVersionString)
           MACOS=$(sw_vers -productVersion)
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+          echo "macOS Name       : ${{ matrix.macos_name }}"
+          echo "macOS Version    : $MACOS"
           echo "Safari Version   : $VER"
           echo "CFBundleVersion  : $CFB"
-          echo "macOS Version    : $MACOS"
 
-          # Write to a JSON file in the repo
-          cat > safari_versions.json << EOF
+          # Save per-OS JSON file
+          mkdir -p output
+          cat > output/safari_${{ matrix.macos_name }}.json << EOF
           {
             "last_updated": "$DATE",
+            "macos_name": "${{ matrix.macos_name }}",
             "macos_version": "$MACOS",
-            "safari_marketing_version": "$VER",
-            "safari_CFBundleVersion": "$CFB"
+            "safari_version": "$VER",
+            "CFBundleVersion": "$CFB"
           }
           EOF
 
-      # Step 3: Append to a history log (so you build up a table over time)
+      # Upload as artifact so both jobs' results can be collected
+      - name: Upload result artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: safari-${{ matrix.macos_name }}
+          path: output/safari_${{ matrix.macos_name }}.json
+
+  # Third job: collect both results and commit to repo
+  commit-results:
+    runs-on: ubuntu-latest
+    needs: get-safari-version   # waits for BOTH matrix jobs to finish
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Sonoma result
+        uses: actions/download-artifact@v4
+        with:
+          name: safari-Sonoma
+          path: output/
+
+      - name: Download Sequoia result
+        uses: actions/download-artifact@v4
+        with:
+          name: safari-Sequoia
+          path: output/
+
+      - name: Show both versions
+        run: |
+          echo "=== Sonoma ==="
+          cat output/safari_Sonoma.json
+
+          echo "=== Sequoia ==="
+          cat output/safari_Sequoia.json
+
       - name: Append to history CSV
         run: |
-          CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
-          VER=$(defaults read /Applications/Safari.app/Contents/Info.plist CFBundleShortVersionString)
-          MACOS=$(sw_vers -productVersion)
+          SONOMA_CFB=$(jq -r '.CFBundleVersion' output/safari_Sonoma.json)
+          SONOMA_VER=$(jq -r '.safari_version'  output/safari_Sonoma.json)
+          SONOMA_MAC=$(jq -r '.macos_version'   output/safari_Sonoma.json)
+
+          SEQUOIA_CFB=$(jq -r '.CFBundleVersion' output/safari_Sequoia.json)
+          SEQUOIA_VER=$(jq -r '.safari_version'  output/safari_Sequoia.json)
+          SEQUOIA_MAC=$(jq -r '.macos_version'   output/safari_Sequoia.json)
+
           DATE=$(date -u +"%Y-%m-%d")
 
-          # Create header if file doesn't exist
           if [ ! -f safari_history.csv ]; then
-            echo "date,macos_version,safari_version,CFBundleVersion" > safari_history.csv
+            echo "date,macos_name,macos_version,safari_version,CFBundleVersion" > safari_history.csv
           fi
 
-          # Append only if this CFBundleVersion isn't already recorded
-          if ! grep -q "$CFB" safari_history.csv; then
-            echo "$DATE,$MACOS,$VER,$CFB" >> safari_history.csv
-            echo "New entry added: $VER ($CFB)"
-          else
-            echo "Already recorded: $VER ($CFB) — no change"
+          if ! grep -q "$SONOMA_CFB" safari_history.csv; then
+            echo "$DATE,Sonoma,$SONOMA_MAC,$SONOMA_VER,$SONOMA_CFB" >> safari_history.csv
+            echo "New Sonoma entry: $SONOMA_VER ($SONOMA_CFB)"
           fi
 
-      # Step 4: Commit and push the updated files back to the repo
-      - name: Commit and push if changed
+          if ! grep -q "$SEQUOIA_CFB" safari_history.csv; then
+            echo "$DATE,Sequoia,$SEQUOIA_MAC,$SEQUOIA_VER,$SEQUOIA_CFB" >> safari_history.csv
+            echo "New Sequoia entry: $SEQUOIA_VER ($SEQUOIA_CFB)"
+          fi
+
+      - name: Generate BigFix Fixlets for both OS versions
+        run: |
+          SONOMA_CFB=$(jq -r '.CFBundleVersion' output/safari_Sonoma.json)
+          SONOMA_VER=$(jq -r '.safari_version'  output/safari_Sonoma.json)
+
+          SEQUOIA_CFB=$(jq -r '.CFBundleVersion' output/safari_Sequoia.json)
+          SEQUOIA_VER=$(jq -r '.safari_version'  output/safari_Sequoia.json)
+
+          cat > safari_fixlet_sonoma.xml << EOF
+          <!-- Safari $SONOMA_VER — macOS Sonoma (14.x) -->
+          <Fixlet>
+            <Relevance><![CDATA[(exists string "ProductVersion" whose (it as string >= "14.0" and it as string < "15.0") of dictionary of it) of file "/System/Library/CoreServices/SystemVersion.plist"]]></Relevance>
+            <Relevance>(exists string "CFBundleVersion" whose (it as string != "$SONOMA_CFB") of dictionary of it) of file "/Applications/Safari.app/Contents/version.plist"</Relevance>
+            <Relevance><![CDATA[((version (version of application "Safari.app" as string & ".0.0") < "$SONOMA_VER" as version))]]></Relevance>
+          </Fixlet>
+          EOF
+
+          cat > safari_fixlet_sequoia.xml << EOF
+          <!-- Safari $SEQUOIA_VER — macOS Sequoia (15.x) -->
+          <Fixlet>
+            <Relevance><![CDATA[(exists string "ProductVersion" whose (it as string >= "15.0" and it as string < "16.0") of dictionary of it) of file "/System/Library/CoreServices/SystemVersion.plist"]]></Relevance>
+            <Relevance>(exists string "CFBundleVersion" whose (it as string != "$SEQUOIA_CFB") of dictionary of it) of file "/Applications/Safari.app/Contents/version.plist"</Relevance>
+            <Relevance><![CDATA[((version (version of application "Safari.app" as string & ".0.0") < "$SEQUOIA_VER" as version))]]></Relevance>
+          </Fixlet>
+          EOF
+
+          echo "Fixlets generated:"
+          echo "  Sonoma  : $SONOMA_VER  → $SONOMA_CFB"
+          echo "  Sequoia : $SEQUOIA_VER → $SEQUOIA_CFB"
+
+      - name: Commit and push all results
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add safari_versions.json safari_history.csv
-          git diff --staged --quiet && echo "No changes to commit" || (
-            git commit -m "chore: update Safari CFBundleVersion $(date -u +%Y-%m-%d)"
+          git add safari_history.csv safari_fixlet_sonoma.xml safari_fixlet_sequoia.xml
+          git diff --staged --quiet && echo "No changes" || (
+            git commit -m "chore: Safari CFBundleVersion update $(date -u +%Y-%m-%d)"
             git push
           )
