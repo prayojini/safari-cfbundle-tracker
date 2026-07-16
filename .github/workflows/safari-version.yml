@@ -21,38 +21,73 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── KEY FIX: Update Safari to latest before reading ──────────────────
-      - name: Check available software updates
+      - name: Show current Safari version
         run: |
-          echo "Current Safari version:"
-          defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion
-
-          echo ""
-          echo "Checking for updates..."
-          sudo softwareupdate -l 2>&1 || true
-
-      - name: Install all available updates (includes Safari)
-        run: |
-          sudo softwareupdate --install --all 2>&1 || true
-          echo "Update complete"
-
-      - name: Verify Safari version after update
-        run: |
-          echo "Safari version after update:"
+          echo "Safari BEFORE update:"
           defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion
           defaults read /Applications/Safari.app/Contents/Info.plist CFBundleShortVersionString
-      # ─────────────────────────────────────────────────────────────────────
 
-      - name: Read Safari CFBundleVersion
+      # ── Install only the Safari update ──────────────────────────────────
+      - name: Find and install Safari update only
+        run: |
+          echo "Listing available software updates..."
+          UPDATE_LIST=$(sudo softwareupdate -l 2>&1)
+          echo "$UPDATE_LIST"
+          echo "---"
+
+          # Extract the label of the Safari update.
+          # softwareupdate -l output pattern:
+          #   * Label: Safari26.5SequoiaAuto-26.5.2
+          #       Title: Safari, Version: 26.5.2 ...
+          #
+          # Strategy: grab the Label line that is immediately followed
+          # by a Title line containing "Safari".
+
+          SAFARI_LABEL=$(echo "$UPDATE_LIST" \
+            | awk '
+                /\* Label:/ { label = $0 }
+                /Title: Safari/ {
+                  # extract just the label value after "Label: "
+                  sub(/.*\* Label: /, "", label)
+                  print label
+                  exit
+                }
+              ')
+
+          if [ -z "$SAFARI_LABEL" ]; then
+            echo "No Safari update found in softwareupdate list."
+            echo "Safari is already up to date — skipping install."
+            exit 0
+          fi
+
+          echo "Found Safari update: '$SAFARI_LABEL'"
+          echo "Installing Safari update only..."
+
+          sudo softwareupdate -i "$SAFARI_LABEL" --verbose
+          INSTALL_EXIT=$?
+
+          if [ $INSTALL_EXIT -eq 0 ]; then
+            echo "Safari update installed successfully."
+          else
+            echo "softwareupdate exited with code $INSTALL_EXIT"
+            exit $INSTALL_EXIT
+          fi
+      # ────────────────────────────────────────────────────────────────────
+
+      - name: Show Safari version after update
+        run: |
+          echo "Safari AFTER update:"
+          CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
+          VER=$(defaults read /Applications/Safari.app/Contents/Info.plist CFBundleShortVersionString)
+          echo "  Marketing version : $VER"
+          echo "  CFBundleVersion   : $CFB"
+
+      - name: Read and save Safari CFBundleVersion
         run: |
           CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
           VER=$(defaults read /Applications/Safari.app/Contents/Info.plist CFBundleShortVersionString)
           MACOS=$(sw_vers -productVersion)
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          echo "macOS   : ${{ matrix.macos_name }} $MACOS"
-          echo "Safari  : $VER"
-          echo "CFBundle: $CFB"
 
           mkdir -p output
           cat > output/safari_${{ matrix.macos_name }}.json << EOF
@@ -64,6 +99,7 @@ jobs:
             "CFBundleVersion": "$CFB"
           }
           EOF
+          cat output/safari_${{ matrix.macos_name }}.json
 
       - name: Upload result artifact
         uses: actions/upload-artifact@v4
@@ -101,16 +137,16 @@ jobs:
           SEQUOIA_MAC=$(jq -r '.macos_version'   output/safari_Sequoia.json)
           DATE=$(date -u +"%Y-%m-%d")
 
-          echo "=== Results ==="
-          echo "Sonoma  : Safari $SONOMA_VER  → CFBundleVersion: $SONOMA_CFB"
-          echo "Sequoia : Safari $SEQUOIA_VER → CFBundleVersion: $SEQUOIA_CFB"
+          echo "Sonoma  : Safari $SONOMA_VER  → $SONOMA_CFB"
+          echo "Sequoia : Safari $SEQUOIA_VER → $SEQUOIA_CFB"
 
-          # History CSV
-          [ ! -f safari_history.csv ] && echo "date,macos_name,macos_version,safari_version,CFBundleVersion" > safari_history.csv
-          grep -q "$SONOMA_CFB"  safari_history.csv || echo "$DATE,Sonoma,$SONOMA_MAC,$SONOMA_VER,$SONOMA_CFB"   >> safari_history.csv
-          grep -q "$SEQUOIA_CFB" safari_history.csv || echo "$DATE,Sequoia,$SEQUOIA_MAC,$SEQUOIA_VER,$SEQUOIA_CFB" >> safari_history.csv
+          [ ! -f safari_history.csv ] && \
+            echo "date,macos_name,macos_version,safari_version,CFBundleVersion" > safari_history.csv
+          grep -q "$SONOMA_CFB"  safari_history.csv || \
+            echo "$DATE,Sonoma,$SONOMA_MAC,$SONOMA_VER,$SONOMA_CFB" >> safari_history.csv
+          grep -q "$SEQUOIA_CFB" safari_history.csv || \
+            echo "$DATE,Sequoia,$SEQUOIA_MAC,$SEQUOIA_VER,$SEQUOIA_CFB" >> safari_history.csv
 
-          # Fixlet XMLs
           cat > safari_fixlet_sonoma.xml << EOF
           <!-- Safari $SONOMA_VER — macOS Sonoma -->
           <Fixlet>
@@ -134,7 +170,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add safari_history.csv safari_fixlet_sonoma.xml safari_fixlet_sequoia.xml
-          git diff --staged --quiet && echo "No changes" || (
+          git diff --staged --quiet && echo "No changes to commit" || (
             git commit -m "chore: Safari CFBundleVersion $(date -u +%Y-%m-%d)"
             git push
           )
