@@ -103,7 +103,7 @@ jobs:
           echo "────────────────────────────────────────────"
 
           # ── Extract Safari label ──────────────────────
-          # Uses sub() which IS supported in BSD awk (macOS default)
+          # BSD awk compatible — uses sub() not 3-arg match()
           SAFARI_LABEL=$(echo "$UPDATE_LIST" \
             | awk '
                 /\* Label:/ {
@@ -116,16 +116,14 @@ jobs:
                 }
               ')
 
-          # ── Extract size using grep -oP ───────────────
-          # Avoids BSD awk limitation (no 3-arg match)
-          # Handles both formats:
-          #   Size: 85692K       (old format)
-          #   Size: 11768183KiB  (new format)
-          # Pattern: number that appears right after "Size: "
-          #          and before K (regardless of what follows K)
+          # ── Extract size using sed ────────────────────
+          # grep -oP not available on macOS (BSD grep has no -P flag)
+          # sed works on both BSD (macOS) and GNU (Linux)
+          # Handles both:  Size: 85692K    and   Size: 218389KiB
+          # sed captures digits between "Size: " and "K"
           SAFARI_SIZE_K=$(echo "$UPDATE_LIST" \
-            | grep "Title: Safari[^a-zA-Z]" \
-            | grep -oP '(?<=Size: )[0-9]+(?=K)')
+            | grep "Title: Safari" \
+            | sed 's/.*Size: \([0-9]*\)K.*/\1/')
 
           if [ -z "$SAFARI_LABEL" ]; then
             echo "No Safari update found in softwareupdate list"
