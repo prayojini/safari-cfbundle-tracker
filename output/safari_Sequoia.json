@@ -1,8 +1,8 @@
 {
-  "last_updated":    "2026-07-16T05:56:40Z",
+  "last_updated":    "2026-07-27T21:02:52Z",
   "macos_name":      "Sequoia",
   "macos_version":   "15.7.7",
-  "safari_version":  "26.5.2",
-  "CFBundleVersion": "20624.2.5.18.7",
-  "size_bytes":      231966720
+  "safari_version":  "26.6",
+  "CFBundleVersion": "20624.4.5.18.1",
+  "size_bytes":      230577152
 }

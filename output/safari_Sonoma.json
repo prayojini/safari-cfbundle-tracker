@@ -1,8 +1,8 @@
 {
-  "last_updated":    "2026-07-16T05:56:47Z",
+  "last_updated":    "2026-07-27T21:02:59Z",
   "macos_name":      "Sonoma",
   "macos_version":   "14.8.7",
-  "safari_version":  "26.5.2",
-  "CFBundleVersion": "19624.2.5.18.7",
-  "size_bytes":      223630336
+  "safari_version":  "26.6",
+  "CFBundleVersion": "19624.4.5.18.1",
+  "size_bytes":      223257600
 }
