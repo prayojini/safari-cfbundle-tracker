@@ -1,0 +1,18 @@
+[
+  {
+    "date": "2026-07-28",
+    "macos_name": "Sonoma",
+    "macos_version": "14.8.7",
+    "safari_version": "26.6",
+    "CFBundleVersion": "19624.4.5.18.1",
+    "size_bytes": 223257600
+  },
+  {
+    "date": "2026-07-28",
+    "macos_name": "Sequoia",
+    "macos_version": "15.7.7",
+    "safari_version": "26.6",
+    "CFBundleVersion": "20624.4.5.18.1",
+    "size_bytes": 230577152
+  }
+]

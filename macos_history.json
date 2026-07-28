@@ -1,0 +1,23 @@
+[
+  {
+    "date": "2026-07-28",
+    "macos_name": "Sonoma",
+    "update_version": "14.8.8",
+    "update_label": "macOS Sonoma 14.8.8-23J620",
+    "size_bytes": 1614023680
+  },
+  {
+    "date": "2026-07-28",
+    "macos_name": "Sequoia",
+    "update_version": "15.7.8",
+    "update_label": "macOS Sequoia 15.7.8-24G824",
+    "size_bytes": 2048673792
+  },
+  {
+    "date": "2026-07-28",
+    "macos_name": "Tahoe",
+    "update_version": "26.6",
+    "update_label": "macOS Tahoe 26.6-25G72",
+    "size_bytes": 4226929664
+  }
+]
