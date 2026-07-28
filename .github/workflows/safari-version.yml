@@ -1,14 +1,15 @@
-name: Track Safari CFBundleVersion
+name: Track Safari and macOS Updates
 
 on:
   schedule:
-    - cron: "0 */2 * * *"
+    - cron: "0 */1 * * *"
   workflow_dispatch:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB 1 — Ubuntu Linux (free). Runs every 2 hours.
-#          Scrapes Apple release page. Compares with txt file.
-#          Only triggers Mac jobs if a new Safari version is found.
+#          Scrapes Apple release page for Safari + macOS (Sonoma/Sequoia/Tahoe)
+#          Compares with known versions txt files.
+#          Triggers Mac jobs only when something new is found.
 # ─────────────────────────────────────────────────────────────────────────────
 jobs:
   check-release:
@@ -27,48 +28,99 @@ jobs:
           echo "Fetching Apple security releases page..."
           PAGE=$(curl -s "https://support.apple.com/en-us/100100")
 
-          # Handles all version formats:
-          #   Safari 26        →  26
-          #   Safari 18.5      →  18.5
-          #   Safari 26.5.2    →  26.5.2
-          # Ignores non-version entries like:
-          #   Safari Extensions, Safari Technology Preview
-          LATEST=$(echo "$PAGE" \
-            | grep -oP 'Safari \K[0-9]+(\.[0-9]+){0,2}' \
-            | head -1)
+          # ── Safari version (handles: 26 / 18.5 / 26.5.2) ─────────────
+          # grep -oE is extended regex — works on both GNU (Linux) and BSD grep
+          LATEST_SAFARI=$(echo "$PAGE" \
+            | grep -oE 'Safari [0-9]+(\.[0-9]+){0,2}' \
+            | head -1 \
+            | sed 's/Safari //')
 
-          if [ -z "$LATEST" ]; then
+          # ── macOS versions ────────────────────────────────────────────
+          LATEST_SONOMA=$(echo "$PAGE" \
+            | grep -oE 'macOS Sonoma [0-9]+\.[0-9]+(\.[0-9]+)?' \
+            | head -1 \
+            | sed 's/macOS Sonoma //')
+
+          LATEST_SEQUOIA=$(echo "$PAGE" \
+            | grep -oE 'macOS Sequoia [0-9]+\.[0-9]+(\.[0-9]+)?' \
+            | head -1 \
+            | sed 's/macOS Sequoia //')
+
+          LATEST_TAHOE=$(echo "$PAGE" \
+            | grep -oE 'macOS Tahoe [0-9]+(\.[0-9]+){0,2}' \
+            | head -1 \
+            | sed 's/macOS Tahoe //')
+
+          echo "──────────────────────────────────────────────"
+          echo "Latest on Apple page:"
+          echo "  Safari  : $LATEST_SAFARI"
+          echo "  Sonoma  : $LATEST_SONOMA"
+          echo "  Sequoia : $LATEST_SEQUOIA"
+          echo "  Tahoe   : $LATEST_TAHOE"
+          echo "──────────────────────────────────────────────"
+
+          if [ -z "$LATEST_SAFARI" ]; then
             echo "ERROR: Could not parse Safari version from Apple page"
             exit 1
           fi
 
-          echo "Latest Safari on Apple page : $LATEST"
+          # ── Read known Safari versions ────────────────────────────────
+          KNOWN_SAFARI_SONOMA=$(grep  "^Sonoma="  safari_known_versions.txt | cut -d= -f2)
+          KNOWN_SAFARI_SEQUOIA=$(grep "^Sequoia=" safari_known_versions.txt | cut -d= -f2)
 
-          # Read known versions from txt file
-          KNOWN_SONOMA=$(grep  "^Sonoma="  safari_known_versions.txt | cut -d= -f2)
-          KNOWN_SEQUOIA=$(grep "^Sequoia=" safari_known_versions.txt | cut -d= -f2)
+          # ── Read known macOS versions ─────────────────────────────────
+          KNOWN_SONOMA=$(grep  "^Sonoma="  macos_known_versions.txt | cut -d= -f2)
+          KNOWN_SEQUOIA=$(grep "^Sequoia=" macos_known_versions.txt | cut -d= -f2)
+          KNOWN_TAHOE=$(grep   "^Tahoe="   macos_known_versions.txt | cut -d= -f2)
 
-          echo "Known Sonoma  version       : $KNOWN_SONOMA"
-          echo "Known Sequoia version       : $KNOWN_SEQUOIA"
+          echo "Known versions in repo:"
+          echo "  Safari  Sonoma  : $KNOWN_SAFARI_SONOMA"
+          echo "  Safari  Sequoia : $KNOWN_SAFARI_SEQUOIA"
+          echo "  macOS   Sonoma  : $KNOWN_SONOMA"
+          echo "  macOS   Sequoia : $KNOWN_SEQUOIA"
+          echo "  macOS   Tahoe   : $KNOWN_TAHOE"
+          echo "──────────────────────────────────────────────"
 
-          if [ "$LATEST" != "$KNOWN_SONOMA" ] || [ "$LATEST" != "$KNOWN_SEQUOIA" ]; then
-            echo "──────────────────────────────────────────"
-            echo "New Safari detected: $LATEST — triggering Mac builds"
-            echo "──────────────────────────────────────────"
-            echo "new_release=true"       >> $GITHUB_OUTPUT
-            echo "latest_safari=$LATEST"  >> $GITHUB_OUTPUT
+          NEW_RELEASE=false
+
+          # Safari check
+          if [ "$LATEST_SAFARI" != "$KNOWN_SAFARI_SONOMA" ] || \
+             [ "$LATEST_SAFARI" != "$KNOWN_SAFARI_SEQUOIA" ]; then
+            echo "New Safari release detected : $LATEST_SAFARI"
+            NEW_RELEASE=true
+          fi
+
+          # macOS checks — only flag if Apple page returned a non-empty value
+          if [ -n "$LATEST_SONOMA"  ] && [ "$LATEST_SONOMA"  != "$KNOWN_SONOMA"  ]; then
+            echo "New macOS Sonoma  detected : $LATEST_SONOMA"
+            NEW_RELEASE=true
+          fi
+          if [ -n "$LATEST_SEQUOIA" ] && [ "$LATEST_SEQUOIA" != "$KNOWN_SEQUOIA" ]; then
+            echo "New macOS Sequoia detected : $LATEST_SEQUOIA"
+            NEW_RELEASE=true
+          fi
+          if [ -n "$LATEST_TAHOE"   ] && [ "$LATEST_TAHOE"   != "$KNOWN_TAHOE"   ]; then
+            echo "New macOS Tahoe   detected : $LATEST_TAHOE"
+            NEW_RELEASE=true
+          fi
+
+          if [ "$NEW_RELEASE" = "true" ]; then
+            echo "new_release=true"              >> $GITHUB_OUTPUT
+            echo "latest_safari=$LATEST_SAFARI"  >> $GITHUB_OUTPUT
           else
-            echo "Safari $LATEST already recorded — no Mac builds needed"
-            echo "new_release=false"      >> $GITHUB_OUTPUT
+            echo "Nothing new — skipping Mac runners"
+            echo "new_release=false"             >> $GITHUB_OUTPUT
           fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 2 — macOS runners (expensive — ONLY runs when new Safari is detected)
-#          Runs on BOTH Sonoma and Sequoia in parallel.
-#          Extracts: label, size_bytes from softwareupdate -l
-#          Installs only Safari, then reads CFBundleVersion.
+# JOB 2 — macOS runners (ONLY when new release detected)
+#          macos-14 (Sonoma)  → Safari + Sonoma update info
+#          macos-15 (Sequoia) → Safari + Sequoia update info + Tahoe update info
+#
+#          NOTE: macOS updates are NOT installed (requires restart, kills runner)
+#                Only Safari is installed. macOS info is read-only from -l output.
 # ─────────────────────────────────────────────────────────────────────────────
-  get-safari-version:
+  get-versions:
     needs: check-release
     if: needs.check-release.outputs.new_release == 'true'
 
@@ -88,65 +140,111 @@ jobs:
 
       - name: Safari version BEFORE update
         run: |
-          echo "── BEFORE ──────────────────────────────────"
+          echo "── Safari BEFORE ───────────────────────────"
           VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
           CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
           echo "  Safari version  : $VER"
           echo "  CFBundleVersion : $CFB"
 
-      - name: Run softwareupdate -l and extract Safari label + size
-        id: safari_info
+      - name: Run softwareupdate -l — extract Safari + macOS update info
+        id: update_info
         run: |
           echo "Listing available software updates..."
           UPDATE_LIST=$(sudo softwareupdate -l 2>&1)
           echo "$UPDATE_LIST"
           echo "────────────────────────────────────────────"
 
-          # ── Extract Safari label ──────────────────────
-          # BSD awk compatible — uses sub() not 3-arg match()
+          OS_NAME="${{ matrix.macos_name }}"
+
+          # ── Safari: label + size ──────────────────────
           SAFARI_LABEL=$(echo "$UPDATE_LIST" \
             | awk '
-                /\* Label:/ {
-                  label = $0
-                  sub(/.*\* Label: /, "", label)
-                }
-                /Title: Safari[^a-zA-Z]/ {
-                  print label
-                  exit
-                }
+                /\* Label:/ { label=$0; sub(/.*\* Label: /, "", label) }
+                /Title: Safari[^a-zA-Z]/ { print label; exit }
               ')
 
-          # ── Extract size using sed ────────────────────
-          # grep -oP not available on macOS (BSD grep has no -P flag)
-          # sed works on both BSD (macOS) and GNU (Linux)
-          # Handles both:  Size: 85692K    and   Size: 218389KiB
-          # sed captures digits between "Size: " and "K"
           SAFARI_SIZE_K=$(echo "$UPDATE_LIST" \
-            | grep "Title: Safari" \
+            | grep "Title: Safari[^a-zA-Z]" \
             | sed 's/.*Size: \([0-9]*\)K.*/\1/')
 
-          if [ -z "$SAFARI_LABEL" ]; then
-            echo "No Safari update found in softwareupdate list"
-            echo "safari_available=false" >> $GITHUB_OUTPUT
-            echo "safari_size_bytes=0"    >> $GITHUB_OUTPUT
-            exit 0
+          # ── macOS update for this runner (Sonoma or Sequoia) ──────────
+          # Uses awk -v to safely pass shell variable into awk pattern
+          MACOS_LABEL=$(echo "$UPDATE_LIST" \
+            | awk -v os="macOS $OS_NAME" '
+                /\* Label:/ { label=$0; sub(/.*\* Label: /, "", label) }
+                index($0, "Title: " os) > 0 { print label; exit }
+              ')
+
+          MACOS_VER=$(echo "$UPDATE_LIST" \
+            | grep "Title: macOS $OS_NAME" \
+            | sed "s/.*Title: macOS $OS_NAME \([0-9.]*\),.*/\1/")
+
+          MACOS_SIZE_K=$(echo "$UPDATE_LIST" \
+            | grep "Title: macOS $OS_NAME" \
+            | sed 's/.*Size: \([0-9]*\)K.*/\1/')
+
+          # ── Tahoe: only visible from Sequoia runner ───────────────────
+          TAHOE_LABEL=""
+          TAHOE_VER=""
+          TAHOE_SIZE_K=""
+
+          if [ "$OS_NAME" = "Sequoia" ]; then
+            TAHOE_LABEL=$(echo "$UPDATE_LIST" \
+              | awk '
+                  /\* Label:/ { label=$0; sub(/.*\* Label: /, "", label) }
+                  /Title: macOS Tahoe[^a-zA-Z]/ { print label; exit }
+                ')
+
+            TAHOE_VER=$(echo "$UPDATE_LIST" \
+              | grep "Title: macOS Tahoe" \
+              | sed 's/.*Title: macOS Tahoe \([0-9.]*\),.*/\1/')
+
+            TAHOE_SIZE_K=$(echo "$UPDATE_LIST" \
+              | grep "Title: macOS Tahoe" \
+              | sed 's/.*Size: \([0-9]*\)K.*/\1/')
           fi
 
-          # KiB → bytes = × 1024
-          SAFARI_SIZE_BYTES=$(( SAFARI_SIZE_K * 1024 ))
+          # ── Convert KiB → bytes ───────────────────────
+          SAFARI_SIZE_BYTES=0
+          MACOS_SIZE_BYTES=0
+          TAHOE_SIZE_BYTES=0
+          [ -n "$SAFARI_SIZE_K" ] && SAFARI_SIZE_BYTES=$(( SAFARI_SIZE_K * 1024 ))
+          [ -n "$MACOS_SIZE_K"  ] && MACOS_SIZE_BYTES=$(( MACOS_SIZE_K  * 1024 ))
+          [ -n "$TAHOE_SIZE_K"  ] && TAHOE_SIZE_BYTES=$(( TAHOE_SIZE_K  * 1024 ))
 
-          echo "Safari Label       : $SAFARI_LABEL"
-          echo "Safari Size        : ${SAFARI_SIZE_K} KiB = ${SAFARI_SIZE_BYTES} bytes"
+          # ── Report ────────────────────────────────────
+          echo "── Extracted info ──────────────────────────"
+          echo "  Safari  label       : ${SAFARI_LABEL:-not found}"
+          echo "  Safari  size bytes  : $SAFARI_SIZE_BYTES"
+          echo "  $OS_NAME label      : ${MACOS_LABEL:-not found}"
+          echo "  $OS_NAME version    : ${MACOS_VER:-not found}"
+          echo "  $OS_NAME size bytes : $MACOS_SIZE_BYTES"
+          [ "$OS_NAME" = "Sequoia" ] && echo "  Tahoe   label       : ${TAHOE_LABEL:-not found}"
+          [ "$OS_NAME" = "Sequoia" ] && echo "  Tahoe   version     : ${TAHOE_VER:-not found}"
+          [ "$OS_NAME" = "Sequoia" ] && echo "  Tahoe   size bytes  : $TAHOE_SIZE_BYTES"
 
-          echo "safari_available=true"               >> $GITHUB_OUTPUT
+          # ── Write to GITHUB_OUTPUT ────────────────────
+          if [ -n "$SAFARI_LABEL" ]; then
+            echo "safari_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "safari_available=false" >> $GITHUB_OUTPUT
+          fi
           echo "safari_label=$SAFARI_LABEL"           >> $GITHUB_OUTPUT
           echo "safari_size_bytes=$SAFARI_SIZE_BYTES" >> $GITHUB_OUTPUT
 
-      - name: Install Safari update only
-        if: steps.safari_info.outputs.safari_available == 'true'
+          echo "macos_label=$MACOS_LABEL"             >> $GITHUB_OUTPUT
+          echo "macos_ver=$MACOS_VER"                 >> $GITHUB_OUTPUT
+          echo "macos_size_bytes=$MACOS_SIZE_BYTES"   >> $GITHUB_OUTPUT
+
+          echo "tahoe_label=$TAHOE_LABEL"             >> $GITHUB_OUTPUT
+          echo "tahoe_ver=$TAHOE_VER"                 >> $GITHUB_OUTPUT
+          echo "tahoe_size_bytes=$TAHOE_SIZE_BYTES"   >> $GITHUB_OUTPUT
+
+      - name: Install Safari update only (macOS NOT installed — requires restart)
+        if: steps.update_info.outputs.safari_available == 'true'
         run: |
-          LABEL="${{ steps.safari_info.outputs.safari_label }}"
-          echo "Installing: $LABEL"
+          LABEL="${{ steps.update_info.outputs.safari_label }}"
+          echo "Installing Safari only: $LABEL"
           echo "────────────────────────────────────────────"
           sudo softwareupdate -i "$LABEL" --verbose
           RESULT=$?
@@ -158,86 +256,169 @@ jobs:
             exit $RESULT
           fi
 
-      - name: Safari version AFTER update — capture CFBundleVersion
+      - name: Capture Safari version AFTER install + write output JSONs
         run: |
-          echo "── AFTER ───────────────────────────────────"
           VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
           CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
-          MACOS=$(sw_vers -productVersion)
+          MACOS_HOST=$(sw_vers -productVersion)
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          SIZE="${{ steps.safari_info.outputs.safari_size_bytes }}"
-          SIZE=${SIZE:-0}
 
-          echo "  macOS           : $MACOS"
-          echo "  Safari version  : $VER"
-          echo "  CFBundleVersion : $CFB"
-          echo "  Size (bytes)    : $SIZE"
+          SAFARI_SIZE="${{ steps.update_info.outputs.safari_size_bytes }}"
+          MACOS_VER="${{ steps.update_info.outputs.macos_ver }}"
+          MACOS_SIZE="${{ steps.update_info.outputs.macos_size_bytes }}"
+          MACOS_LABEL="${{ steps.update_info.outputs.macos_label }}"
+          TAHOE_VER="${{ steps.update_info.outputs.tahoe_ver }}"
+          TAHOE_SIZE="${{ steps.update_info.outputs.tahoe_size_bytes }}"
+          TAHOE_LABEL="${{ steps.update_info.outputs.tahoe_label }}"
+
+          SAFARI_SIZE=${SAFARI_SIZE:-0}
+          MACOS_SIZE=${MACOS_SIZE:-0}
+          TAHOE_SIZE=${TAHOE_SIZE:-0}
 
           mkdir -p output
+
+          # ── Safari JSON ───────────────────────────────
           cat > output/safari_${{ matrix.macos_name }}.json << EOF
           {
             "last_updated":    "$DATE",
             "macos_name":      "${{ matrix.macos_name }}",
-            "macos_version":   "$MACOS",
+            "macos_version":   "$MACOS_HOST",
             "safari_version":  "$VER",
             "CFBundleVersion": "$CFB",
-            "size_bytes":      $SIZE
+            "size_bytes":      $SAFARI_SIZE
           }
           EOF
 
-          echo "Output:"
-          cat output/safari_${{ matrix.macos_name }}.json
+          # ── macOS update JSON (Sonoma or Sequoia) ─────
+          cat > output/macos_${{ matrix.macos_name }}.json << EOF
+          {
+            "last_updated":   "$DATE",
+            "macos_name":     "${{ matrix.macos_name }}",
+            "host_version":   "$MACOS_HOST",
+            "update_version": "$MACOS_VER",
+            "update_label":   "$MACOS_LABEL",
+            "size_bytes":     $MACOS_SIZE
+          }
+          EOF
 
-      - name: Upload result artifact
+          # ── Tahoe JSON (Sequoia runner only) ──────────
+          # Always written — empty values if no Tahoe update in -l output
+          if [ "${{ matrix.macos_name }}" = "Sequoia" ]; then
+            cat > output/macos_Tahoe.json << EOF
+          {
+            "last_updated":   "$DATE",
+            "macos_name":     "Tahoe",
+            "host_version":   "$MACOS_HOST",
+            "update_version": "$TAHOE_VER",
+            "update_label":   "$TAHOE_LABEL",
+            "size_bytes":     $TAHOE_SIZE
+          }
+          EOF
+          fi
+
+          echo "── Output files ────────────────────────────"
+          echo "=== safari_${{ matrix.macos_name }}.json ==="
+          cat output/safari_${{ matrix.macos_name }}.json
+          echo "=== macos_${{ matrix.macos_name }}.json ==="
+          cat output/macos_${{ matrix.macos_name }}.json
+          [ -f output/macos_Tahoe.json ] && echo "=== macos_Tahoe.json ===" && cat output/macos_Tahoe.json
+
+      - name: Upload Safari artifact
         uses: actions/upload-artifact@v4
         with:
           name: safari-${{ matrix.macos_name }}
           path: output/safari_${{ matrix.macos_name }}.json
 
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.macos_name }}
+          path: output/macos_${{ matrix.macos_name }}.json
+
+      - name: Upload Tahoe artifact (Sequoia runner only)
+        if: matrix.macos_name == 'Sequoia'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-Tahoe
+          path: output/macos_Tahoe.json
+
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB 3 — Ubuntu Linux. Waits for both Mac jobs.
-#          Downloads artifacts, updates txt file,
-#          appends to history CSV, commits everything.
+#          Downloads all 5 artifacts, updates both txt files,
+#          appends to safari_history.csv + macos_history.csv, commits.
 # ─────────────────────────────────────────────────────────────────────────────
   commit-results:
     runs-on: ubuntu-latest
-    needs: [check-release, get-safari-version]
+    needs: [check-release, get-versions]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download Sonoma result
+      - name: Download Safari artifacts
         uses: actions/download-artifact@v4
         with:
           name: safari-Sonoma
           path: output/
 
-      - name: Download Sequoia result
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: safari-Sequoia
           path: output/
 
-      - name: Show both results
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-Sonoma
+          path: output/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-Sequoia
+          path: output/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-Tahoe
+          path: output/
+
+      - name: Show all results
         run: |
-          echo "=== Sonoma  ===" && cat output/safari_Sonoma.json
-          echo "=== Sequoia ===" && cat output/safari_Sequoia.json
+          for f in output/*.json; do
+            echo "=== $f ===" && cat "$f" && echo
+          done
 
       - name: Update safari_known_versions.txt
         run: |
           SONOMA_VER=$(jq -r  '.safari_version' output/safari_Sonoma.json)
           SEQUOIA_VER=$(jq -r '.safari_version' output/safari_Sequoia.json)
-
-          cat > safari_known_versions.txt << EOF
-          Sonoma=$SONOMA_VER
-          Sequoia=$SEQUOIA_VER
-          EOF
-
-          echo "Updated safari_known_versions.txt:"
+          printf "Sonoma=%s\nSequoia=%s\n" "$SONOMA_VER" "$SEQUOIA_VER" \
+            > safari_known_versions.txt
+          echo "safari_known_versions.txt:"
           cat safari_known_versions.txt
 
-      - name: Append to history CSV
+      - name: Update macos_known_versions.txt
+        run: |
+          SONOMA_VER=$(jq -r  '.update_version' output/macos_Sonoma.json)
+          SEQUOIA_VER=$(jq -r '.update_version' output/macos_Sequoia.json)
+          TAHOE_VER=$(jq -r   '.update_version' output/macos_Tahoe.json)
+
+          # Fall back to existing known value if update_version is empty/null
+          KNOWN_SONOMA=$(grep  "^Sonoma="  macos_known_versions.txt | cut -d= -f2)
+          KNOWN_SEQUOIA=$(grep "^Sequoia=" macos_known_versions.txt | cut -d= -f2)
+          KNOWN_TAHOE=$(grep   "^Tahoe="   macos_known_versions.txt | cut -d= -f2)
+
+          [ -z "$SONOMA_VER"  ] || [ "$SONOMA_VER"  = "null" ] && SONOMA_VER=$KNOWN_SONOMA
+          [ -z "$SEQUOIA_VER" ] || [ "$SEQUOIA_VER" = "null" ] && SEQUOIA_VER=$KNOWN_SEQUOIA
+          [ -z "$TAHOE_VER"   ] || [ "$TAHOE_VER"   = "null" ] && TAHOE_VER=$KNOWN_TAHOE
+
+          printf "Sonoma=%s\nSequoia=%s\nTahoe=%s\n" \
+            "$SONOMA_VER" "$SEQUOIA_VER" "$TAHOE_VER" \
+            > macos_known_versions.txt
+          echo "macos_known_versions.txt:"
+          cat macos_known_versions.txt
+
+      - name: Append to safari_history.json
         run: |
           SONOMA_VER=$(jq -r   '.safari_version'  output/safari_Sonoma.json)
           SONOMA_CFB=$(jq -r   '.CFBundleVersion' output/safari_Sonoma.json)
@@ -251,20 +432,136 @@ jobs:
 
           DATE=$(date -u +"%Y-%m-%d")
 
-          if [ ! -f safari_history.csv ]; then
-            echo "date,macos_name,macos_version,safari_version,CFBundleVersion,size_bytes" \
-              > safari_history.csv
+          # Read existing JSON array or start fresh
+          if [ -f safari_history.json ]; then
+            EXISTING=$(cat safari_history.json)
+          else
+            EXISTING="[]"
           fi
 
-          grep -q "$SONOMA_CFB"  safari_history.csv \
-            || echo "$DATE,Sonoma,$SONOMA_MAC,$SONOMA_VER,$SONOMA_CFB,$SONOMA_SIZE"   >> safari_history.csv
+          # Build new entries
+          SONOMA_ENTRY=$(jq -n \
+            --arg  date    "$DATE"        \
+            --arg  name    "Sonoma"       \
+            --arg  mac     "$SONOMA_MAC"  \
+            --arg  ver     "$SONOMA_VER"  \
+            --arg  cfb     "$SONOMA_CFB"  \
+            --argjson size "$SONOMA_SIZE" \
+            '{
+              date:            $date,
+              macos_name:      $name,
+              macos_version:   $mac,
+              safari_version:  $ver,
+              CFBundleVersion: $cfb,
+              size_bytes:      $size
+            }')
 
-          grep -q "$SEQUOIA_CFB" safari_history.csv \
-            || echo "$DATE,Sequoia,$SEQUOIA_MAC,$SEQUOIA_VER,$SEQUOIA_CFB,$SEQUOIA_SIZE" >> safari_history.csv
+          SEQUOIA_ENTRY=$(jq -n \
+            --arg  date    "$DATE"         \
+            --arg  name    "Sequoia"       \
+            --arg  mac     "$SEQUOIA_MAC"  \
+            --arg  ver     "$SEQUOIA_VER"  \
+            --arg  cfb     "$SEQUOIA_CFB"  \
+            --argjson size "$SEQUOIA_SIZE" \
+            '{
+              date:            $date,
+              macos_name:      $name,
+              macos_version:   $mac,
+              safari_version:  $ver,
+              CFBundleVersion: $cfb,
+              size_bytes:      $size
+            }')
 
-          echo "safari_history.csv:"
-          cat safari_history.csv
+          # Append only if CFBundleVersion not already in file
+          UPDATED="$EXISTING"
 
+          if ! echo "$EXISTING" | jq -e --arg cfb "$SONOMA_CFB" \
+              'any(.[]; .CFBundleVersion == $cfb)' > /dev/null 2>&1; then
+            UPDATED=$(echo "$UPDATED" | jq --argjson e "$SONOMA_ENTRY"  '. + [$e]')
+            echo "Appended Sonoma  Safari $SONOMA_VER ($SONOMA_CFB)"
+          else
+            echo "Sonoma  Safari $SONOMA_CFB already in history — skipped"
+          fi
+
+          if ! echo "$EXISTING" | jq -e --arg cfb "$SEQUOIA_CFB" \
+              'any(.[]; .CFBundleVersion == $cfb)' > /dev/null 2>&1; then
+            UPDATED=$(echo "$UPDATED" | jq --argjson e "$SEQUOIA_ENTRY" '. + [$e]')
+            echo "Appended Sequoia Safari $SEQUOIA_VER ($SEQUOIA_CFB)"
+          else
+            echo "Sequoia Safari $SEQUOIA_CFB already in history — skipped"
+          fi
+
+          echo "$UPDATED" | jq . > safari_history.json
+          echo "safari_history.json:"
+          cat safari_history.json
+
+      - name: Append to macos_history.json
+        run: |
+          S_VER=$(jq -r  '.update_version' output/macos_Sonoma.json)
+          S_SIZE=$(jq -r '.size_bytes'     output/macos_Sonoma.json)
+          S_LBL=$(jq -r  '.update_label'   output/macos_Sonoma.json)
+
+          Q_VER=$(jq -r  '.update_version' output/macos_Sequoia.json)
+          Q_SIZE=$(jq -r '.size_bytes'     output/macos_Sequoia.json)
+          Q_LBL=$(jq -r  '.update_label'   output/macos_Sequoia.json)
+
+          T_VER=$(jq -r  '.update_version' output/macos_Tahoe.json)
+          T_SIZE=$(jq -r '.size_bytes'     output/macos_Tahoe.json)
+          T_LBL=$(jq -r  '.update_label'   output/macos_Tahoe.json)
+
+          DATE=$(date -u +"%Y-%m-%d")
+
+          # Read existing JSON array or start fresh
+          if [ -f macos_history.json ]; then
+            EXISTING=$(cat macos_history.json)
+          else
+            EXISTING="[]"
+          fi
+
+          UPDATED="$EXISTING"
+
+          # Helper: build entry and append if version not already recorded
+          append_if_new() {
+            local name="$1" ver="$2" lbl="$3" size="$4"
+
+            # Skip if version is empty or null
+            [ -z "$ver" ] || [ "$ver" = "null" ] && return
+
+            if ! echo "$UPDATED" | jq -e \
+                --arg n "$name" --arg v "$ver" \
+                'any(.[]; .macos_name == $n and .update_version == $v)' \
+                > /dev/null 2>&1; then
+
+              ENTRY=$(jq -n \
+                --arg  date "$DATE" \
+                --arg  name "$name" \
+                --arg  ver  "$ver"  \
+                --arg  lbl  "$lbl"  \
+                --argjson size "$size" \
+                '{
+                  date:           $date,
+                  macos_name:     $name,
+                  update_version: $ver,
+                  update_label:   $lbl,
+                  size_bytes:     $size
+                }')
+
+              UPDATED=$(echo "$UPDATED" | jq --argjson e "$ENTRY" '. + [$e]')
+              echo "Appended $name $ver"
+            else
+              echo "$name $ver already in history — skipped"
+            fi
+          }
+
+          append_if_new "Sonoma"  "$S_VER" "$S_LBL" "${S_SIZE:-0}"
+          append_if_new "Sequoia" "$Q_VER" "$Q_LBL" "${Q_SIZE:-0}"
+          append_if_new "Tahoe"   "$T_VER" "$T_LBL" "${T_SIZE:-0}"
+
+          echo "$UPDATED" | jq . > macos_history.json
+          echo "macos_history.json:"
+          cat macos_history.json
+          
+          
       - name: Commit and push all changes
         run: |
           git config user.name  "github-actions[bot]"
@@ -272,12 +569,14 @@ jobs:
 
           git add \
             safari_known_versions.txt \
-            safari_history.csv \
+            macos_known_versions.txt  \
+            safari_history.json       \
+            macos_history.json        \
             output/
 
           git diff --staged --quiet \
             && echo "Nothing to commit — all files are current" \
             || (
-              git commit -m "chore: Safari $(jq -r .safari_version output/safari_Sequoia.json) update $(date -u +%Y-%m-%d)"
+              git commit -m "chore: Apple updates $(date -u +%Y-%m-%d)"
               git push
             )
