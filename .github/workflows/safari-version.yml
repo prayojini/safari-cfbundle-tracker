@@ -129,8 +129,13 @@ jobs:
         include:
           - os: macos-14
             macos_name: Sonoma
+            track_safari: true
           - os: macos-15
             macos_name: Sequoia
+            track_safari: true
+          - os: macos-latest
+            macos_name: Tahoe
+            track_safari: false      # ← Safari not supported on Tahoe
 
     runs-on: ${{ matrix.os }}
 
@@ -139,6 +144,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Safari version BEFORE update
+        if: matrix.track_safari == true
         run: |
           echo "── Safari BEFORE ───────────────────────────"
           VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
@@ -167,8 +173,11 @@ jobs:
             | grep "Title: Safari[^a-zA-Z]" \
             | sed 's/.*Size: \([0-9]*\)K.*/\1/')
 
-          # ── macOS update for this runner (Sonoma or Sequoia) ──────────
-          # Uses awk -v to safely pass shell variable into awk pattern
+          # ── macOS update for THIS runner ──────────────
+          # Each runner only looks for its own OS update
+          # Sonoma  runner → looks for "macOS Sonoma"
+          # Sequoia runner → looks for "macOS Sequoia"
+          # Tahoe   runner → looks for "macOS Tahoe"
           MACOS_LABEL=$(echo "$UPDATE_LIST" \
             | awk -v os="macOS $OS_NAME" '
                 /\* Label:/ { label=$0; sub(/.*\* Label: /, "", label) }
@@ -183,47 +192,19 @@ jobs:
             | grep "Title: macOS $OS_NAME" \
             | sed 's/.*Size: \([0-9]*\)K.*/\1/')
 
-          # ── Tahoe: only visible from Sequoia runner ───────────────────
-          TAHOE_LABEL=""
-          TAHOE_VER=""
-          TAHOE_SIZE_K=""
-
-          if [ "$OS_NAME" = "Sequoia" ]; then
-            TAHOE_LABEL=$(echo "$UPDATE_LIST" \
-              | awk '
-                  /\* Label:/ { label=$0; sub(/.*\* Label: /, "", label) }
-                  /Title: macOS Tahoe[^a-zA-Z]/ { print label; exit }
-                ')
-
-            TAHOE_VER=$(echo "$UPDATE_LIST" \
-              | grep "Title: macOS Tahoe" \
-              | sed 's/.*Title: macOS Tahoe \([0-9.]*\),.*/\1/')
-
-            TAHOE_SIZE_K=$(echo "$UPDATE_LIST" \
-              | grep "Title: macOS Tahoe" \
-              | sed 's/.*Size: \([0-9]*\)K.*/\1/')
-          fi
-
           # ── Convert KiB → bytes ───────────────────────
           SAFARI_SIZE_BYTES=0
           MACOS_SIZE_BYTES=0
-          TAHOE_SIZE_BYTES=0
           [ -n "$SAFARI_SIZE_K" ] && SAFARI_SIZE_BYTES=$(( SAFARI_SIZE_K * 1024 ))
           [ -n "$MACOS_SIZE_K"  ] && MACOS_SIZE_BYTES=$(( MACOS_SIZE_K  * 1024 ))
-          [ -n "$TAHOE_SIZE_K"  ] && TAHOE_SIZE_BYTES=$(( TAHOE_SIZE_K  * 1024 ))
 
-          # ── Report ────────────────────────────────────
-          echo "── Extracted info ──────────────────────────"
-          echo "  Safari  label       : ${SAFARI_LABEL:-not found}"
-          echo "  Safari  size bytes  : $SAFARI_SIZE_BYTES"
-          echo "  $OS_NAME label      : ${MACOS_LABEL:-not found}"
-          echo "  $OS_NAME version    : ${MACOS_VER:-not found}"
-          echo "  $OS_NAME size bytes : $MACOS_SIZE_BYTES"
-          [ "$OS_NAME" = "Sequoia" ] && echo "  Tahoe   label       : ${TAHOE_LABEL:-not found}"
-          [ "$OS_NAME" = "Sequoia" ] && echo "  Tahoe   version     : ${TAHOE_VER:-not found}"
-          [ "$OS_NAME" = "Sequoia" ] && echo "  Tahoe   size bytes  : $TAHOE_SIZE_BYTES"
+          echo "── Extracted ───────────────────────────────"
+          echo "  Safari label      : ${SAFARI_LABEL:-not found}"
+          echo "  Safari size bytes : $SAFARI_SIZE_BYTES"
+          echo "  $OS_NAME label    : ${MACOS_LABEL:-not found}"
+          echo "  $OS_NAME version  : ${MACOS_VER:-not found}"
+          echo "  $OS_NAME size     : $MACOS_SIZE_BYTES bytes"
 
-          # ── Write to GITHUB_OUTPUT ────────────────────
           if [ -n "$SAFARI_LABEL" ]; then
             echo "safari_available=true" >> $GITHUB_OUTPUT
           else
@@ -231,54 +212,44 @@ jobs:
           fi
           echo "safari_label=$SAFARI_LABEL"           >> $GITHUB_OUTPUT
           echo "safari_size_bytes=$SAFARI_SIZE_BYTES" >> $GITHUB_OUTPUT
-
           echo "macos_label=$MACOS_LABEL"             >> $GITHUB_OUTPUT
           echo "macos_ver=$MACOS_VER"                 >> $GITHUB_OUTPUT
           echo "macos_size_bytes=$MACOS_SIZE_BYTES"   >> $GITHUB_OUTPUT
-
-          echo "tahoe_label=$TAHOE_LABEL"             >> $GITHUB_OUTPUT
-          echo "tahoe_ver=$TAHOE_VER"                 >> $GITHUB_OUTPUT
-          echo "tahoe_size_bytes=$TAHOE_SIZE_BYTES"   >> $GITHUB_OUTPUT
-
-      - name: Install Safari update only (macOS NOT installed — requires restart)
-        if: steps.update_info.outputs.safari_available == 'true'
+          
+      - name: Install Safari update only
+        if: matrix.track_safari == true && steps.update_info.outputs.safari_available == 'true'
         run: |
           LABEL="${{ steps.update_info.outputs.safari_label }}"
           echo "Installing Safari only: $LABEL"
           echo "────────────────────────────────────────────"
           sudo softwareupdate -i "$LABEL" --verbose
           RESULT=$?
-          echo "────────────────────────────────────────────"
           if [ $RESULT -eq 0 ]; then
             echo "Safari installed successfully"
           else
             echo "ERROR: softwareupdate exited with code $RESULT"
             exit $RESULT
           fi
-
-      - name: Capture Safari version AFTER install + write output JSONs
+          
+      - name: Capture versions + write output JSONs
         run: |
-          VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
-          CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
           MACOS_HOST=$(sw_vers -productVersion)
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          SAFARI_SIZE="${{ steps.update_info.outputs.safari_size_bytes }}"
-          MACOS_VER="${{ steps.update_info.outputs.macos_ver }}"
+          MACOS_VER="${{  steps.update_info.outputs.macos_ver }}"
           MACOS_SIZE="${{ steps.update_info.outputs.macos_size_bytes }}"
           MACOS_LABEL="${{ steps.update_info.outputs.macos_label }}"
-          TAHOE_VER="${{ steps.update_info.outputs.tahoe_ver }}"
-          TAHOE_SIZE="${{ steps.update_info.outputs.tahoe_size_bytes }}"
-          TAHOE_LABEL="${{ steps.update_info.outputs.tahoe_label }}"
-
-          SAFARI_SIZE=${SAFARI_SIZE:-0}
           MACOS_SIZE=${MACOS_SIZE:-0}
-          TAHOE_SIZE=${TAHOE_SIZE:-0}
 
           mkdir -p output
 
-          # ── Safari JSON ───────────────────────────────
-          cat > output/safari_${{ matrix.macos_name }}.json << EOF
+          # ── Safari JSON — Sonoma and Sequoia only ─────
+          if [ "${{ matrix.track_safari }}" = "true" ]; then
+            SAFARI_SIZE="${{ steps.update_info.outputs.safari_size_bytes }}"
+            SAFARI_SIZE=${SAFARI_SIZE:-0}
+            VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
+            CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
+
+            cat > output/safari_${{ matrix.macos_name }}.json << EOF
           {
             "last_updated":    "$DATE",
             "macos_name":      "${{ matrix.macos_name }}",
@@ -288,42 +259,26 @@ jobs:
             "size_bytes":      $SAFARI_SIZE
           }
           EOF
+            echo "=== safari_${{ matrix.macos_name }}.json ===" && cat output/safari_${{ matrix.macos_name }}.json
+          else
+            echo "Safari not supported on ${{ matrix.macos_name }} — skipping Safari JSON"
+          fi
 
-          # ── macOS update JSON (Sonoma or Sequoia) ─────
+          # ── macOS update JSON — all 3 runners ─────────
           cat > output/macos_${{ matrix.macos_name }}.json << EOF
           {
             "last_updated":   "$DATE",
             "macos_name":     "${{ matrix.macos_name }}",
             "host_version":   "$MACOS_HOST",
-            "update_version": "$MACOS_VER",
-            "update_label":   "$MACOS_LABEL",
+            "update_version": "${MACOS_VER:-}",
+            "update_label":   "${MACOS_LABEL:-}",
             "size_bytes":     $MACOS_SIZE
           }
           EOF
-
-          # ── Tahoe JSON (Sequoia runner only) ──────────
-          # Always written — empty values if no Tahoe update in -l output
-          if [ "${{ matrix.macos_name }}" = "Sequoia" ]; then
-            cat > output/macos_Tahoe.json << EOF
-          {
-            "last_updated":   "$DATE",
-            "macos_name":     "Tahoe",
-            "host_version":   "$MACOS_HOST",
-            "update_version": "$TAHOE_VER",
-            "update_label":   "$TAHOE_LABEL",
-            "size_bytes":     $TAHOE_SIZE
-          }
-          EOF
-          fi
-
-          echo "── Output files ────────────────────────────"
-          echo "=== safari_${{ matrix.macos_name }}.json ==="
-          cat output/safari_${{ matrix.macos_name }}.json
-          echo "=== macos_${{ matrix.macos_name }}.json ==="
-          cat output/macos_${{ matrix.macos_name }}.json
-          [ -f output/macos_Tahoe.json ] && echo "=== macos_Tahoe.json ===" && cat output/macos_Tahoe.json
-
+          echo "=== macos_${{ matrix.macos_name }}.json ===" && cat output/macos_${{ matrix.macos_name }}.json
+          
       - name: Upload Safari artifact
+        if: matrix.track_safari == true
         uses: actions/upload-artifact@v4
         with:
           name: safari-${{ matrix.macos_name }}
