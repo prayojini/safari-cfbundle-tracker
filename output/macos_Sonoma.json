@@ -1,8 +1,8 @@
 {
-  "last_updated":   "2026-07-28T12:12:52Z",
+  "last_updated":   "2026-08-07T00:41:19Z",
   "macos_name":     "Sonoma",
   "host_version":   "14.8.7",
-  "update_version": "14.8.8",
-  "update_label":   "macOS Sonoma 14.8.8-23J620",
-  "size_bytes":     1614023680
+  "update_version": "14.8.9",
+  "update_label":   "macOS Sonoma 14.8.9-23J631",
+  "size_bytes":     1614552064
 }

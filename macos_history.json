@@ -19,5 +19,19 @@
     "update_version": "26.6",
     "update_label": "macOS Tahoe 26.6-25G72",
     "size_bytes": 4226929664
+  },
+  {
+    "date": "2026-08-07",
+    "macos_name": "Sonoma",
+    "update_version": "14.8.9",
+    "update_label": "macOS Sonoma 14.8.9-23J631",
+    "size_bytes": 1614552064
+  },
+  {
+    "date": "2026-08-07",
+    "macos_name": "Sequoia",
+    "update_version": "15.7.9",
+    "update_label": "macOS Sequoia 15.7.9-24G830",
+    "size_bytes": 2048347136
   }
 ]
