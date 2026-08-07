@@ -310,6 +310,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Clean output directory before downloading artifacts
+        run: |
+          rm -rf output/
+          mkdir -p output/
+          echo "output/ cleared — ready for fresh artifacts"
+
       - name: Download Safari artifacts
         uses: actions/download-artifact@v4
         with:
