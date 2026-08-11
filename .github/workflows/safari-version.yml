@@ -290,13 +290,6 @@ jobs:
           name: macos-${{ matrix.macos_name }}
           path: output/macos_${{ matrix.macos_name }}.json
 
-      - name: Upload Tahoe artifact (Sequoia runner only)
-        if: matrix.macos_name == 'Sequoia'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-Tahoe
-          path: output/macos_Tahoe.json
-
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB 3 — Ubuntu Linux. Waits for both Mac jobs.
 #          Downloads all 5 artifacts, updates both txt files,
@@ -309,12 +302,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Clean output directory before downloading artifacts
-        run: |
-          rm -rf output/
-          mkdir -p output/
-          echo "output/ cleared — ready for fresh artifacts"
 
       - name: Download Safari artifacts
         uses: actions/download-artifact@v4
