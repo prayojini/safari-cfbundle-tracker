@@ -40,5 +40,12 @@
     "update_version": "26.6.1",
     "update_label": "macOS Tahoe 26.6.1-25G76",
     "size_bytes": 3919175680
+  },
+  {
+    "date": "2026-08-17",
+    "macos_name": "Tahoe",
+    "update_version": "26.6.2",
+    "update_label": "macOS Tahoe 26.6.2-25G83",
+    "size_bytes": 3923020800
   }
 ]
