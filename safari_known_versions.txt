@@ -1,2 +1,2 @@
-Sonoma=26.6
-Sequoia=26.6
+Sonoma=26.6.1
+Sequoia=26.6.1
