@@ -1,8 +1,8 @@
 {
-  "last_updated":   "2026-08-18T18:39:31Z",
+  "last_updated":   "2026-09-14T18:24:00Z",
   "macos_name":     "Tahoe",
-  "host_version":   "26.5.2",
-  "update_version": "26.6.2",
-  "update_label":   "macOS Tahoe 26.6.2-25G83",
-  "size_bytes":     3923020800
+  "host_version":   "26.6.2",
+  "update_version": "26.7",
+  "update_label":   "macOS Tahoe 26.7-25G229",
+  "size_bytes":     3031400448
 }
