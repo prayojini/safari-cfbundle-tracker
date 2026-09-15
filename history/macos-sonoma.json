@@ -1,0 +1,16 @@
+[
+  {
+    "date": "2026-07-28",
+    "macos_name": "Sonoma",
+    "update_version": "14.8.8",
+    "update_label": "macOS Sonoma 14.8.8-23J620",
+    "size_bytes": 1614023680
+  },
+  {
+    "date": "2026-08-07",
+    "macos_name": "Sonoma",
+    "update_version": "14.8.9",
+    "update_label": "macOS Sonoma 14.8.9-23J631",
+    "size_bytes": 1614552064
+  }
+]

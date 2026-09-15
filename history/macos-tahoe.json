@@ -1,0 +1,30 @@
+[
+  {
+    "date": "2026-07-28",
+    "macos_name": "Tahoe",
+    "update_version": "26.6",
+    "update_label": "macOS Tahoe 26.6-25G72",
+    "size_bytes": 4226929664
+  },
+  {
+    "date": "2026-08-11",
+    "macos_name": "Tahoe",
+    "update_version": "26.6.1",
+    "update_label": "macOS Tahoe 26.6.1-25G76",
+    "size_bytes": 3919175680
+  },
+  {
+    "date": "2026-08-17",
+    "macos_name": "Tahoe",
+    "update_version": "26.6.2",
+    "update_label": "macOS Tahoe 26.6.2-25G83",
+    "size_bytes": 3923020800
+  },
+  {
+    "date": "2026-09-14",
+    "macos_name": "Tahoe",
+    "update_version": "26.7",
+    "update_label": "macOS Tahoe 26.7-25G229",
+    "size_bytes": 3031400448
+  }
+]
