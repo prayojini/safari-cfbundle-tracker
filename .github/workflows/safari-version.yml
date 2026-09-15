@@ -66,7 +66,7 @@ jobs:
                       continue
                   match = re.search(r"(\d+(?:\.\d+){0,2})", row["name"])
                   if match:
-                  version = match.group(1)
+                    version = match.group(1)
                   if "." not in version:
                     version = f"{version}.0"
                   return version
