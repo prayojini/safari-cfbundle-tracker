@@ -1,3 +1,0 @@
-Sonoma=14.8.9
-Sequoia=15.8
-Tahoe=26.7

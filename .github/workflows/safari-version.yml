@@ -34,9 +34,9 @@ jobs:
           set -euo pipefail
 
           echo "Fetching Apple security releases page..."
-          mkdir -p output
+          mkdir -p temp
 
-          python - <<'PY' > output/apple_versions.json
+          python - <<'PY' > temp/apple_versions.json
           import json
           import re
           from urllib.request import urlopen
@@ -66,7 +66,10 @@ jobs:
                       continue
                   match = re.search(r"(\d+(?:\.\d+){0,2})", row["name"])
                   if match:
-                      return match.group(1)
+                  version = match.group(1)
+                  if "." not in version:
+                    version = f"{version}.0"
+                  return version
               return ""
 
           versions = {
@@ -81,7 +84,7 @@ jobs:
           print(json.dumps(versions))
           PY
 
-          cat output/apple_versions.json
+          cat temp/apple_versions.json
 
           read_tracker_value() {
             local file="$1"
@@ -112,12 +115,12 @@ jobs:
             fi
           }
 
-          LATEST_SAFARI_SONOMA=$(jq -r '.safari_sonoma' output/apple_versions.json)
-          LATEST_SAFARI_SEQUOIA=$(jq -r '.safari_sequoia' output/apple_versions.json)
-          LATEST_SAFARI_TAHOE=$(jq -r '.safari_tahoe' output/apple_versions.json)
-          LATEST_MACOS_SONOMA=$(jq -r '.macos_sonoma' output/apple_versions.json)
-          LATEST_MACOS_SEQUOIA=$(jq -r '.macos_sequoia' output/apple_versions.json)
-          LATEST_MACOS_TAHOE=$(jq -r '.macos_tahoe' output/apple_versions.json)
+          LATEST_SAFARI_SONOMA=$(jq -r '.safari_sonoma' temp/apple_versions.json)
+          LATEST_SAFARI_SEQUOIA=$(jq -r '.safari_sequoia' temp/apple_versions.json)
+          LATEST_SAFARI_TAHOE=$(jq -r '.safari_tahoe' temp/apple_versions.json)
+          LATEST_MACOS_SONOMA=$(jq -r '.macos_sonoma' temp/apple_versions.json)
+          LATEST_MACOS_SEQUOIA=$(jq -r '.macos_sequoia' temp/apple_versions.json)
+          LATEST_MACOS_TAHOE=$(jq -r '.macos_tahoe' temp/apple_versions.json)
 
           if [ -z "$LATEST_SAFARI_SONOMA" ] && [ -z "$LATEST_SAFARI_SEQUOIA" ] && [ -z "$LATEST_SAFARI_TAHOE" ]; then
             echo "ERROR: Could not parse any Safari versions from Apple page"
@@ -315,7 +318,7 @@ jobs:
           MACOS_LABEL="${{ steps.update_info.outputs.macos_label }}"
           MACOS_SIZE=${MACOS_SIZE:-0}
 
-          mkdir -p output
+          mkdir -p temp
 
           # ── Safari JSON — Sonoma and Sequoia only ─────
           if [ "${{ matrix.track_safari }}" = "true" ]; then
@@ -324,7 +327,7 @@ jobs:
             VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
             CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
 
-            cat > output/safari_${{ matrix.macos_name }}.json << EOF
+            cat > temp/safari_${{ matrix.macos_name }}.json << EOF
           {
             "last_updated":    "$DATE",
             "macos_name":      "${{ matrix.macos_name }}",
@@ -334,13 +337,13 @@ jobs:
             "size_bytes":      $SAFARI_SIZE
           }
           EOF
-            echo "=== safari_${{ matrix.macos_name }}.json ===" && cat output/safari_${{ matrix.macos_name }}.json
+            echo "=== safari_${{ matrix.macos_name }}.json ===" && cat temp/safari_${{ matrix.macos_name }}.json
           else
             echo "Safari not supported on ${{ matrix.macos_name }} — skipping Safari JSON"
           fi
 
           # ── macOS update JSON — all 3 runners ─────────
-          cat > output/macos_${{ matrix.macos_name }}.json << EOF
+          cat > temp/macos_${{ matrix.macos_name }}.json << EOF
           {
             "last_updated":   "$DATE",
             "macos_name":     "${{ matrix.macos_name }}",
@@ -350,20 +353,20 @@ jobs:
             "size_bytes":     $MACOS_SIZE
           }
           EOF
-          echo "=== macos_${{ matrix.macos_name }}.json ===" && cat output/macos_${{ matrix.macos_name }}.json
+          echo "=== macos_${{ matrix.macos_name }}.json ===" && cat temp/macos_${{ matrix.macos_name }}.json
           
       - name: Upload Safari artifact
         if: matrix.track_safari == true
         uses: actions/upload-artifact@v4
         with:
           name: safari-${{ matrix.macos_name }}
-          path: output/safari_${{ matrix.macos_name }}.json
+          path: temp/safari_${{ matrix.macos_name }}.json
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-${{ matrix.macos_name }}
-          path: output/macos_${{ matrix.macos_name }}.json
+          path: temp/macos_${{ matrix.macos_name }}.json
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB 3 — Ubuntu Linux. Waits for both Mac jobs.
@@ -383,37 +386,37 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: safari-Sonoma
-          path: output/
+          path: temp/
 
       - uses: actions/download-artifact@v4
         with:
           name: safari-Sequoia
-          path: output/
+          path: temp/
 
       - uses: actions/download-artifact@v4
         with:
           name: safari-Tahoe
-          path: output/
+          path: temp/
 
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
           name: macos-Sonoma
-          path: output/
+          path: temp/
 
       - uses: actions/download-artifact@v4
         with:
           name: macos-Sequoia
-          path: output/
+          path: temp/
 
       - uses: actions/download-artifact@v4
         with:
           name: macos-Tahoe
-          path: output/
+          path: temp/
 
       - name: Show all results
         run: |
-          for f in output/*.json; do
+          for f in temp/*.json; do
             echo "=== $f ===" && cat "$f" && echo
           done
 
@@ -435,7 +438,7 @@ jobs:
             local updated
 
             slug=$(echo "$name" | tr '[:upper:]' '[:lower:]')
-            source="output/safari_${name}.json"
+            source="temp/safari_${name}.json"
             tracker="trackers/safari-${slug}.json"
             history="history/safari-${slug}.json"
 
@@ -485,7 +488,7 @@ jobs:
             local updated
 
             slug=$(echo "$name" | tr '[:upper:]' '[:lower:]')
-            source="output/macos_${name}.json"
+            source="temp/macos_${name}.json"
             tracker="trackers/macos-${slug}.json"
             history="history/macos-${slug}.json"
 
