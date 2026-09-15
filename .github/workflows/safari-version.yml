@@ -67,6 +67,7 @@ jobs:
           # ── Read known Safari versions ────────────────────────────────
           KNOWN_SAFARI_SONOMA=$(grep  "^Sonoma="  safari_known_versions.txt | cut -d= -f2)
           KNOWN_SAFARI_SEQUOIA=$(grep "^Sequoia=" safari_known_versions.txt | cut -d= -f2)
+          KNOWN_SAFARI_TAHOE=$(grep "^Tahoe=" safari_known_versions.txt | cut -d= -f2)
 
           # ── Read known macOS versions ─────────────────────────────────
           KNOWN_SONOMA=$(grep  "^Sonoma="  macos_known_versions.txt | cut -d= -f2)
@@ -76,6 +77,7 @@ jobs:
           echo "Known versions in repo:"
           echo "  Safari  Sonoma  : $KNOWN_SAFARI_SONOMA"
           echo "  Safari  Sequoia : $KNOWN_SAFARI_SEQUOIA"
+          echo "  Safari  Tahoe   : $KNOWN_SAFARI_TAHOE"
           echo "  macOS   Sonoma  : $KNOWN_SONOMA"
           echo "  macOS   Sequoia : $KNOWN_SEQUOIA"
           echo "  macOS   Tahoe   : $KNOWN_TAHOE"
@@ -85,7 +87,8 @@ jobs:
 
           # Safari check
           if [ "$LATEST_SAFARI" != "$KNOWN_SAFARI_SONOMA" ] || \
-             [ "$LATEST_SAFARI" != "$KNOWN_SAFARI_SEQUOIA" ]; then
+             [ "$LATEST_SAFARI" != "$KNOWN_SAFARI_SEQUOIA" ] || \
+             [ "$LATEST_SAFARI" != "$KNOWN_SAFARI_TAHOE" ]; then
             echo "New Safari release detected : $LATEST_SAFARI"
             NEW_RELEASE=true
           fi
@@ -135,7 +138,7 @@ jobs:
             track_safari: true
           - os: macos-latest
             macos_name: Tahoe
-            track_safari: false      # ← Safari not supported on Tahoe
+            track_safari: true      # ← Safari not supported on Tahoe
 
     runs-on: ${{ matrix.os }}
 
@@ -314,6 +317,11 @@ jobs:
           name: safari-Sequoia
           path: output/
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: safari-Tahoe
+          path: output/
+
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
@@ -340,7 +348,8 @@ jobs:
         run: |
           SONOMA_VER=$(jq -r  '.safari_version' output/safari_Sonoma.json)
           SEQUOIA_VER=$(jq -r '.safari_version' output/safari_Sequoia.json)
-          printf "Sonoma=%s\nSequoia=%s\n" "$SONOMA_VER" "$SEQUOIA_VER" \
+          TAHOE_VER=$(jq -r '.safari_version' output/safari_Tahoe.json)
+          printf "Sonoma=%s\nSequoia=%s\nTahoe=%s\n" "$SONOMA_VER" "$SEQUOIA_VER" "$TAHOE_VER" \
             > safari_known_versions.txt
           echo "safari_known_versions.txt:"
           cat safari_known_versions.txt
@@ -377,6 +386,11 @@ jobs:
           SEQUOIA_CFB=$(jq -r  '.CFBundleVersion' output/safari_Sequoia.json)
           SEQUOIA_MAC=$(jq -r  '.macos_version'   output/safari_Sequoia.json)
           SEQUOIA_SIZE=$(jq -r '.size_bytes'      output/safari_Sequoia.json)
+
+          TAHOE_VER=$(jq -r   '.safari_version'  output/safari_Tahoe.json)
+          TAHOE_CFB=$(jq -r   '.CFBundleVersion' output/safari_Tahoe.json)
+          TAHOE_MAC=$(jq -r   '.macos_version'   output/safari_Tahoe.json)
+          TAHOE_SIZE=$(jq -r  '.size_bytes'      output/safari_Tahoe.json)
 
           DATE=$(date -u +"%Y-%m-%d")
 
@@ -420,6 +434,22 @@ jobs:
               size_bytes:      $size
             }')
 
+          TAHOE_ENTRY=$(jq -n \
+            --arg  date    "$DATE"        \
+            --arg  name    "Tahoe"       \
+            --arg  mac     "$TAHOE_MAC"  \
+            --arg  ver     "$TAHOE_VER"  \
+            --arg  cfb     "$TAHOE_CFB"  \
+            --argjson size "$TAHOE_SIZE" \
+            '{
+              date:            $date,
+              macos_name:      $name,
+              macos_version:   $mac,
+              safari_version:  $ver,
+              CFBundleVersion: $cfb,
+              size_bytes:      $size
+            }')
+
           # Append only if CFBundleVersion not already in file
           UPDATED="$EXISTING"
 
@@ -437,6 +467,14 @@ jobs:
             echo "Appended Sequoia Safari $SEQUOIA_VER ($SEQUOIA_CFB)"
           else
             echo "Sequoia Safari $SEQUOIA_CFB already in history — skipped"
+          fi
+
+          if ! echo "$EXISTING" | jq -e --arg cfb "$TAHOE_CFB" \
+              'any(.[]; .CFBundleVersion == $cfb)' > /dev/null 2>&1; then
+            UPDATED=$(echo "$UPDATED" | jq --argjson e "$TAHOE_ENTRY" '. + [$e]')
+            echo "Appended Tahoe Safari $TAHOE_VER ($TAHOE_CFB)"
+          else
+            echo "Tahoe Safari $TAHOE_CFB already in history — skipped"
           fi
 
           echo "$UPDATED" | jq . > safari_history.json
