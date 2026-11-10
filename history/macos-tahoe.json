@@ -42,5 +42,13 @@
     "update_version": "26.7.2",
     "update_label": "macOS Tahoe 26.7.2-25G332",
     "size_bytes": 3185893376
+  },
+  {
+    "last_updated": "2026-11-10T13:24:20Z",
+    "macos_name": "Tahoe",
+    "host_version": "26.7.2",
+    "update_version": "26.7.3",
+    "update_label": "macOS Tahoe 26.7.3-25G342",
+    "size_bytes": 2566822912
   }
 ]
