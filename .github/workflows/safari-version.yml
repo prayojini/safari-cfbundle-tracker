@@ -162,7 +162,8 @@ jobs:
             "$SAFARI_SEQUOIA_CHANGED" \
             "$SAFARI_TAHOE_CHANGED" \
             "$MACOS_SEQUOIA_CHANGED" \
-            "$MACOS_TAHOE_CHANGED"; do
+            "$MACOS_TAHOE_CHANGED" \
+            "$MACOS_GOLDEN_GATE_CHANGED"; do
             if [ "$flag" = "true" ]; then
               ANY_CHANGE=true
             fi
