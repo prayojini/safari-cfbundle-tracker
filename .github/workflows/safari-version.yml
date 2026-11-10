@@ -7,7 +7,7 @@ on:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB 1 — Ubuntu Linux (free). Runs every 2 hours.
-#          Scrapes Apple release page for Safari + macOS (Sonoma/Sequoia/Tahoe)
+#          Scrapes Apple release page for Safari + macOS (Sequoia/Tahoe/GoldenGate)
 #          Compares with known versions txt files.
 #          Triggers Mac jobs only when something new is found.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -16,12 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       any_change:             ${{ steps.check.outputs.any_change }}
-      safari_sonoma_changed:  ${{ steps.check.outputs.safari_sonoma_changed }}
       safari_sequoia_changed: ${{ steps.check.outputs.safari_sequoia_changed }}
       safari_tahoe_changed:   ${{ steps.check.outputs.safari_tahoe_changed }}
-      macos_sonoma_changed:   ${{ steps.check.outputs.macos_sonoma_changed }}
       macos_sequoia_changed:  ${{ steps.check.outputs.macos_sequoia_changed }}
       macos_tahoe_changed:    ${{ steps.check.outputs.macos_tahoe_changed }}
+      macos_golden_gate_changed: ${{ steps.check.outputs.macos_golden_gate_changed }}
 
     steps:
       - name: Checkout repository
@@ -73,12 +72,11 @@ jobs:
               return ""
 
           versions = {
-              "safari_sonoma": first_version("Safari ", "macOS Sonoma"),
               "safari_sequoia": first_version("Safari ", "macOS Sequoia"),
               "safari_tahoe": first_version("Safari ", "macOS Tahoe"),
-              "macos_sonoma": first_version("macOS Sonoma "),
               "macos_sequoia": first_version("macOS Sequoia "),
               "macos_tahoe": first_version("macOS Tahoe "),
+              "macos_golden_gate": first_version("macOS GoldenGate "),
           }
 
           print(json.dumps(versions))
@@ -115,52 +113,47 @@ jobs:
             fi
           }
 
-          LATEST_SAFARI_SONOMA=$(jq -r '.safari_sonoma' temp/apple_versions.json)
           LATEST_SAFARI_SEQUOIA=$(jq -r '.safari_sequoia' temp/apple_versions.json)
           LATEST_SAFARI_TAHOE=$(jq -r '.safari_tahoe' temp/apple_versions.json)
-          LATEST_MACOS_SONOMA=$(jq -r '.macos_sonoma' temp/apple_versions.json)
+          LATEST_MACOS_GOLDEN_GATE=$(jq -r '.macos_golden_gate' temp/apple_versions.json)
           LATEST_MACOS_SEQUOIA=$(jq -r '.macos_sequoia' temp/apple_versions.json)
           LATEST_MACOS_TAHOE=$(jq -r '.macos_tahoe' temp/apple_versions.json)
 
-          if [ -z "$LATEST_SAFARI_SONOMA" ] && [ -z "$LATEST_SAFARI_SEQUOIA" ] && [ -z "$LATEST_SAFARI_TAHOE" ]; then
+          if [ -z "$LATEST_SAFARI_SEQUOIA" ] && [ -z "$LATEST_SAFARI_TAHOE" ]; then
             echo "ERROR: Could not parse any Safari versions from Apple page"
             exit 1
           fi
 
-          KNOWN_SAFARI_SONOMA=$(read_tracker_value trackers/safari-sonoma.json safari_version)
           KNOWN_SAFARI_SEQUOIA=$(read_tracker_value trackers/safari-sequoia.json safari_version)
           KNOWN_SAFARI_TAHOE=$(read_tracker_value trackers/safari-tahoe.json safari_version)
-          KNOWN_MACOS_SONOMA=$(read_tracker_value trackers/macos-sonoma.json update_version)
+          KNOWN_MACOS_GOLDEN_GATE=$(read_tracker_value trackers/macos-golden-gate.json update_version)
           KNOWN_MACOS_SEQUOIA=$(read_tracker_value trackers/macos-sequoia.json update_version)
           KNOWN_MACOS_TAHOE=$(read_tracker_value trackers/macos-tahoe.json update_version)
 
-          [ -n "$KNOWN_SAFARI_SONOMA" ] || KNOWN_SAFARI_SONOMA=$(read_legacy_value safari_known_versions.txt Sonoma)
           [ -n "$KNOWN_SAFARI_SEQUOIA" ] || KNOWN_SAFARI_SEQUOIA=$(read_legacy_value safari_known_versions.txt Sequoia)
           [ -n "$KNOWN_SAFARI_TAHOE" ] || KNOWN_SAFARI_TAHOE=$(read_legacy_value safari_known_versions.txt Tahoe)
-          [ -n "$KNOWN_MACOS_SONOMA" ] || KNOWN_MACOS_SONOMA=$(read_legacy_value macos_known_versions.txt Sonoma)
+          [ -n "$KNOWN_MACOS_GOLDEN_GATE" ] || KNOWN_MACOS_GOLDEN_GATE=$(read_legacy_value macos_known_versions.txt "GoldenGate")
           [ -n "$KNOWN_MACOS_SEQUOIA" ] || KNOWN_MACOS_SEQUOIA=$(read_legacy_value macos_known_versions.txt Sequoia)
           [ -n "$KNOWN_MACOS_TAHOE" ] || KNOWN_MACOS_TAHOE=$(read_legacy_value macos_known_versions.txt Tahoe)
 
-          SAFARI_SONOMA_CHANGED=$(changed_flag "$LATEST_SAFARI_SONOMA" "$KNOWN_SAFARI_SONOMA")
           SAFARI_SEQUOIA_CHANGED=$(changed_flag "$LATEST_SAFARI_SEQUOIA" "$KNOWN_SAFARI_SEQUOIA")
           SAFARI_TAHOE_CHANGED=$(changed_flag "$LATEST_SAFARI_TAHOE" "$KNOWN_SAFARI_TAHOE")
           MACOS_SONOMA_CHANGED=$(changed_flag "$LATEST_MACOS_SONOMA" "$KNOWN_MACOS_SONOMA")
           MACOS_SEQUOIA_CHANGED=$(changed_flag "$LATEST_MACOS_SEQUOIA" "$KNOWN_MACOS_SEQUOIA")
           MACOS_TAHOE_CHANGED=$(changed_flag "$LATEST_MACOS_TAHOE" "$KNOWN_MACOS_TAHOE")
+          MACOS_GOLDEN_GATE_CHANGED=$(changed_flag "$LATEST_MACOS_GOLDEN_GATE" "$KNOWN_MACOS_GOLDEN_GATE")
 
           echo "──────────────────────────────────────────────"
           echo "Latest on Apple page:"
-          echo "  Safari Sonoma  : $LATEST_SAFARI_SONOMA"
           echo "  Safari Sequoia : $LATEST_SAFARI_SEQUOIA"
           echo "  Safari Tahoe   : $LATEST_SAFARI_TAHOE"
-          echo "  macOS  Sonoma  : $LATEST_MACOS_SONOMA"
+          echo "  macOS  Golden Gate : $LATEST_MACOS_GOLDEN_GATE"
           echo "  macOS  Sequoia : $LATEST_MACOS_SEQUOIA"
           echo "  macOS  Tahoe   : $LATEST_MACOS_TAHOE"
           echo "Known tracker versions:"
-          echo "  Safari Sonoma  : $KNOWN_SAFARI_SONOMA"
+          echo "  macOS  Golden Gate : $KNOWN_MACOS_GOLDEN_GATE"
           echo "  Safari Sequoia : $KNOWN_SAFARI_SEQUOIA"
           echo "  Safari Tahoe   : $KNOWN_SAFARI_TAHOE"
-          echo "  macOS  Sonoma  : $KNOWN_MACOS_SONOMA"
           echo "  macOS  Sequoia : $KNOWN_MACOS_SEQUOIA"
           echo "  macOS  Tahoe   : $KNOWN_MACOS_TAHOE"
           echo "──────────────────────────────────────────────"
@@ -205,15 +198,18 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-14
-            macos_name: Sonoma
-            track_safari: true
+          # - os: macos-14
+          #   macos_name: Sonoma
+          #   track_safari: true
           - os: macos-15
             macos_name: Sequoia
             track_safari: true
-          - os: macos-latest
+          - os: macos-26
             macos_name: Tahoe
             track_safari: true
+          - os: xcode-27
+            macos_name: GoldenGate
+            track_safari: false
 
     runs-on: ${{ matrix.os }}
 

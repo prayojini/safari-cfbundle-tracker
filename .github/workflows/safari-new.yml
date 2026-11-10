@@ -1,0 +1,544 @@
+name: Track Safari and macOS Updates
+
+on:
+  schedule:
+    - cron: "0 */1 * * *"
+  workflow_dispatch:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 1 — Ubuntu Linux (free). Runs every 2 hours.
+#          Scrapes Apple release page for Safari + macOS (Sequoia/Tahoe/Golden Gate)
+#          Compares with known versions txt files.
+#          Triggers Mac jobs only when something new is found.
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      any_change:             ${{ steps.check.outputs.any_change }}
+      safari_sequoia_changed: ${{ steps.check.outputs.safari_sequoia_changed }}
+      safari_tahoe_changed:   ${{ steps.check.outputs.safari_tahoe_changed }}
+      macos_sequoia_changed:  ${{ steps.check.outputs.macos_sequoia_changed }}
+      macos_tahoe_changed:    ${{ steps.check.outputs.macos_tahoe_changed }}
+      macos_golden_gate_changed: ${{ steps.check.outputs.macos_golden_gate_changed }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scrape Apple release page and compare with per-track trackers
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Fetching Apple security releases page..."
+          mkdir -p temp
+
+          python - <<'PY' > temp/apple_versions.json
+          import json
+          import re
+          from urllib.request import urlopen
+
+          URL = "https://support.apple.com/en-us/100100"
+          html = urlopen(URL).read().decode("utf-8", "ignore")
+
+          def clean(fragment):
+              text = re.sub(r"<[^>]+>", " ", fragment)
+              return re.sub(r"\s+", " ", text).strip()
+
+          rows = []
+          for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.IGNORECASE | re.DOTALL):
+              cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row_html, re.IGNORECASE | re.DOTALL)
+              if len(cells) < 3:
+                  continue
+              name, available, release_date = [clean(cell) for cell in cells[:3]]
+              if name.lower().startswith("name and information"):
+                  continue
+              rows.append({"name": name, "available": available, "release_date": release_date})
+
+          def first_version(name_prefix, available_contains=None):
+              for row in rows:
+                  if not row["name"].startswith(name_prefix):
+                      continue
+                  if available_contains and available_contains not in row["available"]:
+                      continue
+                  match = re.search(r"(\d+(?:\.\d+){0,2})", row["name"])
+                  if match:
+                    version = match.group(1)
+                  if "." not in version:
+                    version = f"{version}.0"
+                  return version
+              return ""
+
+          versions = {
+              "safari_sequoia": first_version("Safari ", "macOS Sequoia"),
+              "safari_tahoe": first_version("Safari ", "macOS Tahoe"),
+              "macos_sequoia": first_version("macOS Sequoia "),
+              "macos_tahoe": first_version("macOS Tahoe "),
+              "macos_golden_gate": first_version("macOS Golden Gate "),
+          }
+
+          print(json.dumps(versions))
+          PY
+
+          cat temp/apple_versions.json
+
+          read_tracker_value() {
+            local file="$1"
+            local key="$2"
+
+            if [ -f "$file" ]; then
+              jq -r --arg key "$key" '.[$key] // ""' "$file" 2>/dev/null || true
+            fi
+          }
+
+          read_legacy_value() {
+            local file="$1"
+            local name="$2"
+
+            if [ -f "$file" ]; then
+              grep "^${name}=" "$file" | cut -d= -f2 || true
+            fi
+          }
+
+          changed_flag() {
+            local latest="$1"
+            local known="$2"
+
+            if [ -n "$latest" ] && [ "$latest" != "$known" ]; then
+              echo true
+            else
+              echo false
+            fi
+          }
+
+          LATEST_SAFARI_SEQUOIA=$(jq -r '.safari_sequoia' temp/apple_versions.json)
+          LATEST_SAFARI_TAHOE=$(jq -r '.safari_tahoe' temp/apple_versions.json)
+          LATEST_MACOS_GOLDEN_GATE=$(jq -r '.macos_golden_gate' temp/apple_versions.json)
+          LATEST_MACOS_SEQUOIA=$(jq -r '.macos_sequoia' temp/apple_versions.json)
+          LATEST_MACOS_TAHOE=$(jq -r '.macos_tahoe' temp/apple_versions.json)
+
+          if [ -z "$LATEST_SAFARI_SEQUOIA" ] && [ -z "$LATEST_SAFARI_TAHOE" ]; then
+            echo "ERROR: Could not parse any Safari versions from Apple page"
+            exit 1
+          fi
+
+          KNOWN_SAFARI_SEQUOIA=$(read_tracker_value trackers/safari-sequoia.json safari_version)
+          KNOWN_SAFARI_TAHOE=$(read_tracker_value trackers/safari-tahoe.json safari_version)
+          KNOWN_MACOS_GOLDEN_GATE=$(read_tracker_value trackers/macos-golden-gate.json update_version)
+          KNOWN_MACOS_SEQUOIA=$(read_tracker_value trackers/macos-sequoia.json update_version)
+          KNOWN_MACOS_TAHOE=$(read_tracker_value trackers/macos-tahoe.json update_version)
+
+          [ -n "$KNOWN_SAFARI_SEQUOIA" ] || KNOWN_SAFARI_SEQUOIA=$(read_legacy_value safari_known_versions.txt Sequoia)
+          [ -n "$KNOWN_SAFARI_TAHOE" ] || KNOWN_SAFARI_TAHOE=$(read_legacy_value safari_known_versions.txt Tahoe)
+          [ -n "$KNOWN_MACOS_GOLDEN_GATE" ] || KNOWN_MACOS_GOLDEN_GATE=$(read_legacy_value macos_known_versions.txt "GoldenGate")
+          [ -n "$KNOWN_MACOS_SEQUOIA" ] || KNOWN_MACOS_SEQUOIA=$(read_legacy_value macos_known_versions.txt Sequoia)
+          [ -n "$KNOWN_MACOS_TAHOE" ] || KNOWN_MACOS_TAHOE=$(read_legacy_value macos_known_versions.txt Tahoe)
+
+          SAFARI_SEQUOIA_CHANGED=$(changed_flag "$LATEST_SAFARI_SEQUOIA" "$KNOWN_SAFARI_SEQUOIA")
+          SAFARI_TAHOE_CHANGED=$(changed_flag "$LATEST_SAFARI_TAHOE" "$KNOWN_SAFARI_TAHOE")
+          MACOS_GOLDEN_GATE_CHANGED=$(changed_flag "$LATEST_MACOS_GOLDEN_GATE" "$KNOWN_MACOS_GOLDEN_GATE")
+          MACOS_SEQUOIA_CHANGED=$(changed_flag "$LATEST_MACOS_SEQUOIA" "$KNOWN_MACOS_SEQUOIA")
+          MACOS_TAHOE_CHANGED=$(changed_flag "$LATEST_MACOS_TAHOE" "$KNOWN_MACOS_TAHOE")
+
+          echo "──────────────────────────────────────────────"
+          echo "Latest on Apple page:"
+          echo "  Safari Sequoia : $LATEST_SAFARI_SEQUOIA"
+          echo "  Safari Tahoe   : $LATEST_SAFARI_TAHOE"
+          echo "  macOS Golden Gate : $LATEST_MACOS_GOLDEN_GATE"
+          echo "  macOS  Sequoia : $LATEST_MACOS_SEQUOIA"
+          echo "  macOS  Tahoe   : $LATEST_MACOS_TAHOE"
+          echo "Known tracker versions:"
+          echo "  Safari Sequoia : $KNOWN_SAFARI_SEQUOIA"
+          echo "  Safari Tahoe   : $KNOWN_SAFARI_TAHOE"
+          echo "  macOS Golden Gate : $KNOWN_MACOS_GOLDEN_GATE"
+          echo "  macOS  Sequoia : $KNOWN_MACOS_SEQUOIA"
+          echo "  macOS  Tahoe   : $KNOWN_MACOS_TAHOE"
+          echo "──────────────────────────────────────────────"
+
+          ANY_CHANGE=false
+          for flag in \
+            "$SAFARI_SEQUOIA_CHANGED" \
+            "$SAFARI_TAHOE_CHANGED" \
+            "$MACOS_GOLDEN_GATE_CHANGED" \
+            "$MACOS_SEQUOIA_CHANGED" \
+            "$MACOS_TAHOE_CHANGED"; do
+            if [ "$flag" = "true" ]; then
+              ANY_CHANGE=true
+            fi
+          done
+
+          echo "any_change=$ANY_CHANGE"                         >> "$GITHUB_OUTPUT"
+          echo "safari_sequoia_changed=$SAFARI_SEQUOIA_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "safari_tahoe_changed=$SAFARI_TAHOE_CHANGED"     >> "$GITHUB_OUTPUT"
+          echo "macos_golden_gate_changed=$MACOS_GOLDEN_GATE_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "macos_sequoia_changed=$MACOS_SEQUOIA_CHANGED"   >> "$GITHUB_OUTPUT"
+          echo "macos_tahoe_changed=$MACOS_TAHOE_CHANGED"       >> "$GITHUB_OUTPUT"
+
+          if [ "$ANY_CHANGE" = "false" ]; then
+            echo "Nothing new — skipping Mac runners"
+          fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 2 — macOS runners (ONLY when new release detected)
+#          macos-15 (Sequoia)    → Safari + Sequoia update info
+#          macos-26 (Tahoe)      → Safari + Tahoe update info
+#          xcode-27 (GoldenGate) → Golden Gate update info
+#
+#          NOTE: macOS updates are NOT installed (requires restart, kills runner)
+#                Only Safari is installed. macOS info is read-only from -l output.
+# ─────────────────────────────────────────────────────────────────────────────
+  get-versions:
+    needs: check-release
+    if: needs.check-release.outputs.any_change == 'true'
+
+    strategy:
+      matrix:
+        include:
+          - os: macos-15
+            macos_name: Sequoia
+            track_safari: true
+          - os: macos-26
+            macos_name: Tahoe
+            track_safari: true
+          - os: xcode-27
+            macos_name: GoldenGate
+            track_safari: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Safari version BEFORE update
+        if: matrix.track_safari == true
+        run: |
+          echo "── Safari BEFORE ───────────────────────────"
+          VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
+          CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
+          echo "  Safari version  : $VER"
+          echo "  CFBundleVersion : $CFB"
+
+      - name: Run softwareupdate -l — extract Safari + macOS update info
+        id: update_info
+        run: |
+          echo "Listing available software updates..."
+          UPDATE_LIST=$(sudo softwareupdate -l 2>&1)
+          echo "$UPDATE_LIST"
+          echo "────────────────────────────────────────────"
+
+          OS_NAME="${{ matrix.macos_name }}"
+          if [ "$OS_NAME" = "GoldenGate" ]; then
+            OS_NAME="Golden Gate"
+          fi
+
+          # ── Safari: label + size ──────────────────────
+          SAFARI_LABEL=$(echo "$UPDATE_LIST" \
+            | awk '
+                /\* Label:/ { label=$0; sub(/.*\* Label: /, "", label) }
+                /Title: Safari[^a-zA-Z]/ { print label; exit }
+              ')
+
+          SAFARI_SIZE_K=$(echo "$UPDATE_LIST" \
+            | sed -n '/Title: Safari[^a-zA-Z]/{s/.*Size: \([0-9]*\)K.*/\1/p;q;}')
+
+          # ── macOS update for THIS runner ──────────────
+          # Each runner only looks for its own OS update
+          # GoldenGate runner → looks for "macOS Golden Gate"
+          # Sequoia runner → looks for "macOS Sequoia"
+          # Tahoe   runner → looks for "macOS Tahoe"
+          MACOS_LABEL=$(echo "$UPDATE_LIST" \
+            | awk -v os="macOS $OS_NAME" '
+                /\* Label:/ { label=$0; sub(/.*\* Label: /, "", label) }
+                index($0, "Title: " os " ") > 0 { print label; exit }
+              ')
+
+          MACOS_VER=$(echo "$UPDATE_LIST" \
+            | sed -n "/Title: macOS $OS_NAME /{s/.*Version: \([0-9.]*\),.*/\1/p;q;}")
+
+          MACOS_SIZE_K=$(echo "$UPDATE_LIST" \
+            | sed -n "/Title: macOS $OS_NAME /{s/.*Size: \([0-9]*\)K.*/\1/p;q;}")
+
+          MACOS_BUILD=$(echo "$MACOS_LABEL" \
+            | sed -n 's/.*-\([0-9][0-9]*[A-Z][0-9][0-9]*[a-z]*\)$/\1/p')
+
+          if [ -n "$MACOS_LABEL" ]; then
+            if [ -z "$MACOS_VER" ] || [ -z "$MACOS_BUILD" ] || [ -z "$MACOS_SIZE_K" ] || [ "$MACOS_SIZE_K" -eq 0 ]; then
+              echo "::error::Could not extract version, build ID, and positive size from $MACOS_LABEL"
+              exit 1
+            fi
+          else
+            echo "::warning::No macOS $OS_NAME update offered; build ID and download size are unavailable"
+          fi
+
+          # ── Convert KiB → bytes ───────────────────────
+          SAFARI_SIZE_BYTES=0
+          MACOS_SIZE_BYTES=0
+          [ -n "$SAFARI_SIZE_K" ] && SAFARI_SIZE_BYTES=$(( SAFARI_SIZE_K * 1024 ))
+          [ -n "$MACOS_SIZE_K"  ] && MACOS_SIZE_BYTES=$(( MACOS_SIZE_K  * 1024 ))
+
+          echo "── Extracted ───────────────────────────────"
+          echo "  Safari label      : ${SAFARI_LABEL:-not found}"
+          echo "  Safari size bytes : $SAFARI_SIZE_BYTES"
+          echo "  $OS_NAME label    : ${MACOS_LABEL:-not found}"
+          echo "  $OS_NAME version  : ${MACOS_VER:-not found}"
+          echo "  $OS_NAME build    : ${MACOS_BUILD:-not found}"
+          echo "  $OS_NAME size     : $MACOS_SIZE_BYTES bytes"
+
+          if [ -n "$SAFARI_LABEL" ]; then
+            echo "safari_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "safari_available=false" >> $GITHUB_OUTPUT
+          fi
+          echo "safari_label=$SAFARI_LABEL"           >> $GITHUB_OUTPUT
+          echo "safari_size_bytes=$SAFARI_SIZE_BYTES" >> $GITHUB_OUTPUT
+          echo "macos_label=$MACOS_LABEL"             >> $GITHUB_OUTPUT
+          echo "macos_ver=$MACOS_VER"                 >> $GITHUB_OUTPUT
+          echo "macos_build=$MACOS_BUILD"             >> $GITHUB_OUTPUT
+          echo "macos_size_bytes=$MACOS_SIZE_BYTES"   >> $GITHUB_OUTPUT
+          
+      - name: Install Safari update only
+        if: steps.update_info.outputs.safari_available == 'true' && ((matrix.macos_name == 'Sequoia' && needs.check-release.outputs.safari_sequoia_changed == 'true') || (matrix.macos_name == 'Tahoe' && needs.check-release.outputs.safari_tahoe_changed == 'true'))
+        run: |
+          LABEL="${{ steps.update_info.outputs.safari_label }}"
+          echo "Installing Safari only: $LABEL"
+          echo "────────────────────────────────────────────"
+          sudo softwareupdate -i "$LABEL" --verbose
+          RESULT=$?
+          if [ $RESULT -eq 0 ]; then
+            echo "Safari installed successfully"
+          else
+            echo "ERROR: softwareupdate exited with code $RESULT"
+            exit $RESULT
+          fi
+          
+      - name: Capture versions + write output JSONs
+        run: |
+          MACOS_HOST=$(sw_vers -productVersion)
+          DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          MACOS_VER="${{  steps.update_info.outputs.macos_ver }}"
+          MACOS_SIZE="${{ steps.update_info.outputs.macos_size_bytes }}"
+          MACOS_LABEL="${{ steps.update_info.outputs.macos_label }}"
+          MACOS_BUILD="${{ steps.update_info.outputs.macos_build }}"
+          MACOS_SIZE=${MACOS_SIZE:-0}
+
+          mkdir -p temp
+
+          # ── Safari JSON — Sequoia and Tahoe only ──────
+          if [ "${{ matrix.track_safari }}" = "true" ]; then
+            SAFARI_SIZE="${{ steps.update_info.outputs.safari_size_bytes }}"
+            SAFARI_SIZE=${SAFARI_SIZE:-0}
+            VER=$(defaults read /Applications/Safari.app/Contents/Info.plist    CFBundleShortVersionString)
+            CFB=$(defaults read /Applications/Safari.app/Contents/version.plist CFBundleVersion)
+
+            cat > temp/safari_${{ matrix.macos_name }}.json << EOF
+          {
+            "last_updated":    "$DATE",
+            "macos_name":      "${{ matrix.macos_name }}",
+            "macos_version":   "$MACOS_HOST",
+            "safari_version":  "$VER",
+            "CFBundleVersion": "$CFB",
+            "size_bytes":      $SAFARI_SIZE
+          }
+          EOF
+            echo "=== safari_${{ matrix.macos_name }}.json ===" && cat temp/safari_${{ matrix.macos_name }}.json
+          else
+            echo "Safari tracking disabled on ${{ matrix.macos_name }} — skipping Safari JSON"
+          fi
+
+          # ── macOS update JSON — all 3 runners ─────────
+          cat > temp/macos_${{ matrix.macos_name }}.json << EOF
+          {
+            "last_updated":   "$DATE",
+            "macos_name":     "${{ matrix.macos_name }}",
+            "host_version":   "$MACOS_HOST",
+            "update_version": "${MACOS_VER:-}",
+            "update_label":   "${MACOS_LABEL:-}",
+            "update_build":   "${MACOS_BUILD:-}",
+            "size_bytes":     $MACOS_SIZE
+          }
+          EOF
+          echo "=== macos_${{ matrix.macos_name }}.json ===" && cat temp/macos_${{ matrix.macos_name }}.json
+          
+      - name: Upload Safari artifact
+        if: matrix.track_safari == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: safari-${{ matrix.macos_name }}
+          path: temp/safari_${{ matrix.macos_name }}.json
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.macos_name }}
+          path: temp/macos_${{ matrix.macos_name }}.json
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB 3 — Ubuntu Linux. Waits for all three Mac jobs.
+#          Downloads artifacts and updates only the per-track files whose
+#          Safari or macOS version changed.
+# ─────────────────────────────────────────────────────────────────────────────
+  commit-results:
+    runs-on: ubuntu-latest
+    needs: [check-release, get-versions]
+    if: needs.check-release.outputs.any_change == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Safari artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: safari-Sequoia
+          path: temp/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: safari-Tahoe
+          path: temp/
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-GoldenGate
+          path: temp/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-Sequoia
+          path: temp/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-Tahoe
+          path: temp/
+
+      - name: Show all results
+        run: |
+          for f in temp/*.json; do
+            echo "=== $f ===" && cat "$f" && echo
+          done
+
+      - name: Update Safari per-track files
+        run: |
+          set -euo pipefail
+
+          mkdir -p trackers history
+
+          update_safari_track() {
+            local name="$1"
+            local changed="$2"
+            local slug
+            local source
+            local tracker
+            local history
+            local cfb
+            local existing
+            local updated
+
+            slug=$(echo "$name" | tr '[:upper:]' '[:lower:]')
+            source="temp/safari_${name}.json"
+            tracker="trackers/safari-${slug}.json"
+            history="history/safari-${slug}.json"
+
+            if [ "$changed" != "true" ]; then
+              echo "Safari $name unchanged — leaving $tracker and $history as-is"
+              return
+            fi
+
+            cp "$source" "$tracker"
+            cfb=$(jq -r '.CFBundleVersion // ""' "$source")
+
+            if [ -f "$history" ]; then
+              existing=$(cat "$history")
+            else
+              existing="[]"
+            fi
+
+            if [ -n "$cfb" ] && ! echo "$existing" | jq -e --arg cfb "$cfb" 'any(.[]; .CFBundleVersion == $cfb)' > /dev/null 2>&1; then
+              updated=$(printf '%s\n' "$existing" | jq --slurpfile entry "$source" '. + $entry')
+              echo "$updated" | jq . > "$history"
+              echo "Updated Safari $name tracker and appended history"
+            else
+              echo "$existing" | jq . > "$history"
+              echo "Updated Safari $name tracker; history already contains $cfb"
+            fi
+          }
+
+          update_safari_track "Sequoia" "${{ needs.check-release.outputs.safari_sequoia_changed }}"
+          update_safari_track "Tahoe"   "${{ needs.check-release.outputs.safari_tahoe_changed }}"
+
+      - name: Update macOS per-track files
+        run: |
+          set -euo pipefail
+
+          mkdir -p trackers history
+
+          update_macos_track() {
+            local name="$1"
+            local changed="$2"
+            local slug
+            local source
+            local tracker
+            local history
+            local version
+            local existing
+            local updated
+
+            slug=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/^goldengate$/golden-gate/')
+            source="temp/macos_${name}.json"
+            tracker="trackers/macos-${slug}.json"
+            history="history/macos-${slug}.json"
+
+            if [ "$changed" != "true" ]; then
+              echo "macOS $name unchanged — leaving $tracker and $history as-is"
+              return
+            fi
+
+            version=$(jq -r '.update_version // ""' "$source")
+            if [ -z "$version" ] || [ "$version" = "null" ]; then
+              echo "macOS $name did not report an update version — skipping tracker update"
+              return
+            fi
+
+            cp "$source" "$tracker"
+
+            if [ -f "$history" ]; then
+              existing=$(cat "$history")
+            else
+              existing="[]"
+            fi
+
+            if ! echo "$existing" | jq -e --arg version "$version" 'any(.[]; .update_version == $version)' > /dev/null 2>&1; then
+              updated=$(printf '%s\n' "$existing" | jq --slurpfile entry "$source" '. + $entry')
+              echo "$updated" | jq . > "$history"
+              echo "Updated macOS $name tracker and appended history"
+            else
+              echo "$existing" | jq . > "$history"
+              echo "Updated macOS $name tracker; history already contains $version"
+            fi
+          }
+
+          update_macos_track "GoldenGate" "${{ needs.check-release.outputs.macos_golden_gate_changed }}"
+          update_macos_track "Sequoia" "${{ needs.check-release.outputs.macos_sequoia_changed }}"
+          update_macos_track "Tahoe"   "${{ needs.check-release.outputs.macos_tahoe_changed }}"
+          
+          
+      - name: Commit and push all changes
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            trackers/ \
+            history/
+
+          git diff --staged --quiet \
+            && echo "Nothing to commit — all files are current" \
+            || (
+              git commit -m "chore: Apple updates $(date -u +%Y-%m-%d)"
+              git push
+            )
