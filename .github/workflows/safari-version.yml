@@ -138,7 +138,6 @@ jobs:
 
           SAFARI_SEQUOIA_CHANGED=$(changed_flag "$LATEST_SAFARI_SEQUOIA" "$KNOWN_SAFARI_SEQUOIA")
           SAFARI_TAHOE_CHANGED=$(changed_flag "$LATEST_SAFARI_TAHOE" "$KNOWN_SAFARI_TAHOE")
-          MACOS_SONOMA_CHANGED=$(changed_flag "$LATEST_MACOS_SONOMA" "$KNOWN_MACOS_SONOMA")
           MACOS_SEQUOIA_CHANGED=$(changed_flag "$LATEST_MACOS_SEQUOIA" "$KNOWN_MACOS_SEQUOIA")
           MACOS_TAHOE_CHANGED=$(changed_flag "$LATEST_MACOS_TAHOE" "$KNOWN_MACOS_TAHOE")
           MACOS_GOLDEN_GATE_CHANGED=$(changed_flag "$LATEST_MACOS_GOLDEN_GATE" "$KNOWN_MACOS_GOLDEN_GATE")
@@ -147,7 +146,7 @@ jobs:
           echo "Latest on Apple page:"
           echo "  Safari Sequoia : $LATEST_SAFARI_SEQUOIA"
           echo "  Safari Tahoe   : $LATEST_SAFARI_TAHOE"
-          echo "  macOS  Golden Gate : $LATEST_MACOS_GOLDEN_GATE"
+          echo "  macOS Golden Gate : $LATEST_MACOS_GOLDEN_GATE"
           echo "  macOS  Sequoia : $LATEST_MACOS_SEQUOIA"
           echo "  macOS  Tahoe   : $LATEST_MACOS_TAHOE"
           echo "Known tracker versions:"
@@ -160,10 +159,8 @@ jobs:
 
           ANY_CHANGE=false
           for flag in \
-            "$SAFARI_SONOMA_CHANGED" \
             "$SAFARI_SEQUOIA_CHANGED" \
             "$SAFARI_TAHOE_CHANGED" \
-            "$MACOS_SONOMA_CHANGED" \
             "$MACOS_SEQUOIA_CHANGED" \
             "$MACOS_TAHOE_CHANGED"; do
             if [ "$flag" = "true" ]; then
@@ -172,12 +169,11 @@ jobs:
           done
 
           echo "any_change=$ANY_CHANGE"                         >> "$GITHUB_OUTPUT"
-          echo "safari_sonoma_changed=$SAFARI_SONOMA_CHANGED"   >> "$GITHUB_OUTPUT"
           echo "safari_sequoia_changed=$SAFARI_SEQUOIA_CHANGED" >> "$GITHUB_OUTPUT"
           echo "safari_tahoe_changed=$SAFARI_TAHOE_CHANGED"     >> "$GITHUB_OUTPUT"
-          echo "macos_sonoma_changed=$MACOS_SONOMA_CHANGED"     >> "$GITHUB_OUTPUT"
           echo "macos_sequoia_changed=$MACOS_SEQUOIA_CHANGED"   >> "$GITHUB_OUTPUT"
           echo "macos_tahoe_changed=$MACOS_TAHOE_CHANGED"       >> "$GITHUB_OUTPUT"
+          echo "macos_golden_gate_changed=$MACOS_GOLDEN_GATE_CHANGED" >> "$GITHUB_OUTPUT"
 
           if [ "$ANY_CHANGE" = "false" ]; then
             echo "Nothing new — skipping Mac runners"
@@ -185,9 +181,9 @@ jobs:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JOB 2 — macOS runners (ONLY when new release detected)
-#          macos-14 (Sonoma)  → Safari + Sonoma update info
-#          macos-15 (Sequoia) → Safari + Sequoia update info + Tahoe update info
-#
+#          macos-15 (Sequoia)    → Safari + Sequoia update info
+#          macos-26 (Tahoe)      → Safari + Tahoe update info
+#          xcode-27 (GoldenGate) → Golden Gate update info
 #          NOTE: macOS updates are NOT installed (requires restart, kills runner)
 #                Only Safari is installed. macOS info is read-only from -l output.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -198,9 +194,6 @@ jobs:
     strategy:
       matrix:
         include:
-          # - os: macos-14
-          #   macos_name: Sonoma
-          #   track_safari: true
           - os: macos-15
             macos_name: Sequoia
             track_safari: true
@@ -235,7 +228,9 @@ jobs:
           echo "────────────────────────────────────────────"
 
           OS_NAME="${{ matrix.macos_name }}"
-
+          if [ "$OS_NAME" = "GoldenGate" ]; then
+            OS_NAME="Golden Gate"
+          fi
           # ── Safari: label + size ──────────────────────
           SAFARI_LABEL=$(echo "$UPDATE_LIST" \
             | awk '
@@ -249,9 +244,9 @@ jobs:
 
           # ── macOS update for THIS runner ──────────────
           # Each runner only looks for its own OS update
-          # Sonoma  runner → looks for "macOS Sonoma"
           # Sequoia runner → looks for "macOS Sequoia"
           # Tahoe   runner → looks for "macOS Tahoe"
+          # GoldenGate runner → looks for "macOS Golden Gate"
           MACOS_LABEL=$(echo "$UPDATE_LIST" \
             | awk -v os="macOS $OS_NAME" '
                 /\* Label:/ { label=$0; sub(/.*\* Label: /, "", label) }
@@ -291,7 +286,7 @@ jobs:
           echo "macos_size_bytes=$MACOS_SIZE_BYTES"   >> $GITHUB_OUTPUT
           
       - name: Install Safari update only
-        if: steps.update_info.outputs.safari_available == 'true' && ((matrix.macos_name == 'Sonoma' && needs.check-release.outputs.safari_sonoma_changed == 'true') || (matrix.macos_name == 'Sequoia' && needs.check-release.outputs.safari_sequoia_changed == 'true') || (matrix.macos_name == 'Tahoe' && needs.check-release.outputs.safari_tahoe_changed == 'true'))
+        if: steps.update_info.outputs.safari_available == 'true' && ((matrix.macos_name == 'Sequoia' && needs.check-release.outputs.safari_sequoia_changed == 'true') || (matrix.macos_name == 'Tahoe' && needs.check-release.outputs.safari_tahoe_changed == 'true'))
         run: |
           LABEL="${{ steps.update_info.outputs.safari_label }}"
           echo "Installing Safari only: $LABEL"
@@ -316,7 +311,7 @@ jobs:
 
           mkdir -p temp
 
-          # ── Safari JSON — Sonoma and Sequoia only ─────
+          # ── Safari JSON — Sequoia and Tahoe only ──────
           if [ "${{ matrix.track_safari }}" = "true" ]; then
             SAFARI_SIZE="${{ steps.update_info.outputs.safari_size_bytes }}"
             SAFARI_SIZE=${SAFARI_SIZE:-0}
@@ -365,7 +360,7 @@ jobs:
           path: temp/macos_${{ matrix.macos_name }}.json
 
 # ─────────────────────────────────────────────────────────────────────────────
-# JOB 3 — Ubuntu Linux. Waits for both Mac jobs.
+# JOB 3 — Ubuntu Linux. Waits for all three Mac jobs.
 #          Downloads artifacts and updates only the per-track files whose
 #          Safari or macOS version changed.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -381,11 +376,6 @@ jobs:
       - name: Download Safari artifacts
         uses: actions/download-artifact@v4
         with:
-          name: safari-Sonoma
-          path: temp/
-
-      - uses: actions/download-artifact@v4
-        with:
           name: safari-Sequoia
           path: temp/
 
@@ -397,7 +387,7 @@ jobs:
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
-          name: macos-Sonoma
+          name: macos-GoldenGate
           path: temp/
 
       - uses: actions/download-artifact@v4
@@ -462,7 +452,6 @@ jobs:
             fi
           }
 
-          update_safari_track "Sonoma"  "${{ needs.check-release.outputs.safari_sonoma_changed }}"
           update_safari_track "Sequoia" "${{ needs.check-release.outputs.safari_sequoia_changed }}"
           update_safari_track "Tahoe"   "${{ needs.check-release.outputs.safari_tahoe_changed }}"
 
@@ -517,7 +506,7 @@ jobs:
             fi
           }
 
-          update_macos_track "Sonoma"  "${{ needs.check-release.outputs.macos_sonoma_changed }}"
+          update_macos_track "GoldenGate" "${{ needs.check-release.outputs.macos_golden_gate_changed }}"
           update_macos_track "Sequoia" "${{ needs.check-release.outputs.macos_sequoia_changed }}"
           update_macos_track "Tahoe"   "${{ needs.check-release.outputs.macos_tahoe_changed }}"
           
