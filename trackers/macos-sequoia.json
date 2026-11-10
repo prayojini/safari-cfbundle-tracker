@@ -1,9 +1,8 @@
 {
-  "last_updated":   "2026-11-10T13:07:30Z",
+  "last_updated":   "2026-10-26T21:26:34Z",
   "macos_name":     "Sequoia",
-  "host_version":   "15.8.2",
-  "update_version": "15.8.3",
-  "update_label":   "macOS Sequoia 15.8.3-24H241",
-  "update_build":   "24H241",
-  "size_bytes":     1766538240
+  "host_version":   "15.7.9",
+  "update_version": "15.8.2",
+  "update_label":   "macOS Sequoia 15.8.2-24H232",
+  "size_bytes":     2315774976
 }
