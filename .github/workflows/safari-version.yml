@@ -76,7 +76,7 @@ jobs:
               "safari_tahoe": first_version("Safari ", "macOS Tahoe"),
               "macos_sequoia": first_version("macOS Sequoia "),
               "macos_tahoe": first_version("macOS Tahoe "),
-              "macos_golden_gate": first_version("macOS GoldenGate "),
+              "macos_golden_gate": first_version("macOS Golden Gate "),
           }
 
           print(json.dumps(versions))
