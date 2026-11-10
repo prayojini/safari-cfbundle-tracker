@@ -228,8 +228,13 @@ jobs:
           echo "────────────────────────────────────────────"
 
           OS_NAME="${{ matrix.macos_name }}"
+          # Golden Gate updates are listed without the marketing name,
+          # e.g. "Title: macOS 27.2.1, Version: 27.2.1"
           if [ "$OS_NAME" = "GoldenGate" ]; then
             OS_NAME="Golden Gate"
+            MACOS_TITLE_RE="Title: macOS [0-9]"
+          else
+            MACOS_TITLE_RE="Title: macOS $OS_NAME [0-9]"
           fi
           # ── Safari: label + size ──────────────────────
           SAFARI_LABEL=$(echo "$UPDATE_LIST" \
@@ -248,17 +253,19 @@ jobs:
           # Tahoe   runner → looks for "macOS Tahoe"
           # GoldenGate runner → looks for "macOS Golden Gate"
           MACOS_LABEL=$(echo "$UPDATE_LIST" \
-            | awk -v os="macOS $OS_NAME" '
-                /\* Label:/ { label=$0; sub(/.*\* Label: /, "", label) }
-                index($0, "Title: " os) > 0 { print label; exit }
+            | awk -v re="$MACOS_TITLE_RE" '
+                /Label:/ { label=$0; sub(/.*Label: /, "", label) }
+                $0 ~ re { print label; exit }
               ')
 
           MACOS_VER=$(echo "$UPDATE_LIST" \
-            | grep "Title: macOS $OS_NAME" \
-            | sed "s/.*Title: macOS $OS_NAME \([0-9.]*\),.*/\1/")
+            | grep -E "$MACOS_TITLE_RE" \
+            | head -n 1 \
+            | sed 's/.*Version: \([0-9.]*\),.*/\1/')
 
           MACOS_SIZE_K=$(echo "$UPDATE_LIST" \
-            | grep "Title: macOS $OS_NAME" \
+            | grep -E "$MACOS_TITLE_RE" \
+            | head -n 1 \
             | sed 's/.*Size: \([0-9]*\)K.*/\1/')
 
           # ── Convert KiB → bytes ───────────────────────
